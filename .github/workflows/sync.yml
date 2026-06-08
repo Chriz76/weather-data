@@ -3,7 +3,7 @@ name: Run DWD Pipeline
 on:
   workflow_dispatch:
   #schedule:
-  #  - cron: '45 * * * *'  # Jede Stunde
+  #  - cron: '45 * * * *'  # Hourly execution
 
 permissions:
   contents: write
@@ -15,7 +15,7 @@ jobs:
     steps:
       - name: Checkout Code (main)
         uses: actions/checkout@v4
-        # Holt deinen Python-Code aus dem Hauptzweig
+        # Retrieve the application source code from the main branch
 
       - name: Checkout Existing Data (gh-pages)
         uses: actions/checkout@v4
@@ -23,15 +23,14 @@ jobs:
           ref: gh-pages
           path: output
         continue-on-error: true
-        # Lädt den LETZTEN Zustand der PNGs/JSONs direkt in den './output' Ordner.
-        # 'continue-on-error' sorgt dafür, dass die Pipeline nicht abstürzt,
-        # falls der Branch 'gh-pages' auf GitHub noch gar nicht existiert.
+        # Fetch the current state of data assets into the './output' directory.
+        # 'continue-on-error' ensures the workflow proceeds if the 'gh-pages' branch does not exist yet.
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip' # Aktiviert das Caching für schnellere Pip-Installationen
+          cache: 'pip' # Enable caching for optimized dependency installation
 
       - name: Install system dependencies
         run: |
@@ -45,27 +44,27 @@ jobs:
 
       - name: Run pipeline
         run: python pipeline/src/dwd_pipeline.py
-        # Dein Skript findet jetzt im Ordner './output' alle alten Daten vor,
-        # erkennt Lücken im Modus B und aktualisiert die index.json korrekt!
+        # The script evaluates existing data in './output' to perform gap-detection
+        # and incrementally updates the dataset along with index.json.
 
       - name: Clean and Force-Push Data Branch (gh-pages)
         run: |
-          # Wir wechseln direkt in den Output-Ordner
+          # Navigate into the processed output directory
           cd output
           
-          # Wir löschen die Git-Historie des vorherigen Checkouts aus diesem Ordner
+          # Remove the existing git metadata fetched during the checkout step
           rm -rf .git
           
-          # Wir initialisieren ein brandneues, temporäres Git-Repo NUR für die Daten
+          # Initialize a clean, isolated git repository for data deployment
           git init -b gh-pages
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           
-          # Alle vorhandenen und neu generierten PNGs/JSONs hinzufügen
+          # Stage and commit all existing and newly generated data assets
           git add -A
           git commit -m "DWD Weather Pipeline - Live State [skip ci]"
           
-          # GNADENLOSER FORCE-PUSH: Überschreibt nur den 'gh-pages'-Branch.
-          # Die Dateien liegen dort direkt im Root-Verzeichnis, perfekt für GitHub Pages!
+          # Force-push to overwrite the 'gh-pages' branch, keeping the commit history flat 
+          # and serving the assets directly from the repository root for GitHub Pages.
           git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
           git push --force origin gh-pages
