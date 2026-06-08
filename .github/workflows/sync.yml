@@ -5,51 +5,67 @@ on:
   #schedule:
   #  - cron: '45 * * * *'  # Jede Stunde
 
+permissions:
+  contents: write
+
 jobs:
   pipeline:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout repository
+      - name: Checkout Code (main)
         uses: actions/checkout@v4
-      
+        # Holt deinen Python-Code aus dem Hauptzweig
+
+      - name: Checkout Existing Data (gh-pages)
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: output
+        continue-on-error: true
+        # Lädt den LETZTEN Zustand der PNGs/JSONs direkt in den './output' Ordner.
+        # 'continue-on-error' sorgt dafür, dass die Pipeline nicht abstürzt,
+        # falls der Branch 'gh-pages' auf GitHub noch gar nicht existiert.
+
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      
+          cache: 'pip' # Aktiviert das Caching für schnellere Pip-Installationen
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libeccodes-dev
-      
+
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r pipeline/requirements.txt
-      
+
       - name: Run pipeline
         run: python pipeline/src/dwd_pipeline.py
-      
-      - name: Hard reset main branch to exactly one commit
+        # Dein Skript findet jetzt im Ordner './output' alle alten Daten vor,
+        # erkennt Lücken im Modus B und aktualisiert die index.json korrekt!
+
+      - name: Clean and Force-Push Data Branch (gh-pages)
         run: |
-          # 1. Lokalen Git-Ordner komplett löschen (vernichtet die lokale Historie)
+          # Wir wechseln direkt in den Output-Ordner
+          cd output
+          
+          # Wir löschen die Git-Historie des vorherigen Checkouts aus diesem Ordner
           rm -rf .git
           
-          # 2. Ein brandneues, leeres Git-Repository initialisieren
-          git init -b main
+          # Wir initialisieren ein brandneues, temporäres Git-Repo NUR für die Daten
+          git init -b gh-pages
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           
-          # 3. Alle Dateien (deinen Code + die aktuellen PNGs und JSONs) hinzufügen
+          # Alle vorhandenen und neu generierten PNGs/JSONs hinzufügen
           git add -A
-          
-          # 4. Den einzigen, aktuellen Commit erstellen
           git commit -m "DWD Weather Pipeline - Live State [skip ci]"
           
-          # 5. Die Verbindung zu deinem GitHub-Repository wiederherstellen
+          # GNADENLOSER FORCE-PUSH: Überschreibt nur den 'gh-pages'-Branch.
+          # Die Dateien liegen dort direkt im Root-Verzeichnis, perfekt für GitHub Pages!
           git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
-          
-          # 6. GNADENLOSER FORCE-PUSH: Überschreibt den main-Branch auf GitHub komplett.
-          # Alles, was vorher auf GitHub war (alte Commits, alte PNGs), wird gelöscht!
-          git push --force origin main
+          git push --force origin gh-pages
