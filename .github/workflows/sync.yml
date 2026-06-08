@@ -1,0 +1,55 @@
+name: Run DWD Pipeline
+
+on:
+  workflow_dispatch:
+  #schedule:
+  #  - cron: '45 * * * *'  # Jede Stunde
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeccodes-dev
+      
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r pipeline/requirements.txt
+      
+      - name: Run pipeline
+        run: python pipeline/src/dwd_pipeline.py
+      
+      - name: Hard reset main branch to exactly one commit
+        run: |
+          # 1. Lokalen Git-Ordner komplett löschen (vernichtet die lokale Historie)
+          rm -rf .git
+          
+          # 2. Ein brandneues, leeres Git-Repository initialisieren
+          git init -b main
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          # 3. Alle Dateien (deinen Code + die aktuellen PNGs und JSONs) hinzufügen
+          git add -A
+          
+          # 4. Den einzigen, aktuellen Commit erstellen
+          git commit -m "DWD Weather Pipeline - Live State [skip ci]"
+          
+          # 5. Die Verbindung zu deinem GitHub-Repository wiederherstellen
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          
+          # 6. GNADENLOSER FORCE-PUSH: Überschreibt den main-Branch auf GitHub komplett.
+          # Alles, was vorher auf GitHub war (alte Commits, alte PNGs), wird gelöscht!
+          git push --force origin main

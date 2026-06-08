@@ -1,0 +1,184 @@
+import os
+import sys
+import requests
+import shutil
+import json
+from datetime import datetime, timezone, timedelta
+
+# Pfad-Erweiterung für den Import (z.B. in Google Colab oder GitHub Actions)
+sys.path.append(os.path.dirname(__file__))
+from process import WindProcessor
+
+# --- KONFIGURATION ---
+ROOT_FOLDER = "."  
+OUTPUT_DIR = "./output" 
+TEMP_GRIB_DIR = "./grib_temp"
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(TEMP_GRIB_DIR, exist_ok=True)
+
+def download_file(url, local_path):
+    """Hilfsfunktion für echte Downloads mit Stream-Pufferung"""
+    try:
+        response = requests.get(url, timeout=15, stream=True)
+        if response.status_code == 200:
+            with open(local_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            return True
+    except Exception as e:
+        print(f"   ⚠️ Download-Fehler: {e}")
+    return False
+
+def run_ruc_pipeline():
+    utc_now = datetime.now(timezone.utc)
+    print(f"\n========================================================")
+    print(f"START PIPELINE - Aktuelle UTC Zeit: {utc_now.strftime('%Y-%m-%d %H:%M:%S')}Z")
+    print(f"========================================================")
+
+    # Erstelle den Prozessor (Lädt die optimierte Gewichtungsmatrix)
+    processor = WindProcessor(root_folder=ROOT_FOLDER, output_folder=OUTPUT_DIR)
+    newest_run_processed = False
+    
+    # --- NEU: Hier merken wir uns den echten, aktuellsten Laufzeitstempel ---
+    detected_current_hour = None
+
+    for hour_offset in range(14):
+        target_time = utc_now - timedelta(hours=hour_offset)
+        target_time = target_time.replace(minute=0, second=0, microsecond=0)
+        dwd_run_folder = target_time.strftime("%Y-%m-%dT%H:00")
+
+        # Pfad für die finale +14h PNG-Datei dieses Laufs
+        final_valid_time = target_time + timedelta(hours=14)
+        final_output_filename = f"{final_valid_time.strftime('%Y%m%d_%H')}Z.png"
+        final_output_path = os.path.join(OUTPUT_DIR, final_output_filename)
+
+        # Verarbeitungs-Modus entscheiden (Modus A oder Modus B)
+        should_process = False
+        missing_hours = []
+
+        if not newest_run_processed:
+            if os.path.exists(final_output_path):
+                print(f"💾 [Lauf {dwd_run_folder}Z] Bereits komplett vorhanden. (Wechsle in Historie-Modus)")
+                newest_run_processed = True
+                # Wenn er schon da ist, ist das unsere aktuelle Basis-Stunde (Gegenwart für die App)
+                detected_current_hour = target_time.strftime('%Y%m%d_%H')
+            else:
+                print(f"📡 [Lauf {dwd_run_folder}Z] Fehlt lokal. Prüfe DWD Server...")
+                should_process = True
+                missing_hours = list(range(15))  # Alle 15 Schritte von PT000H bis PT014H
+
+        if newest_run_processed:
+            # Modus B: Historie nach Lücken scannen
+            for f_hour in range(15):
+                valid_time = target_time + timedelta(hours=f_hour)
+                output_filename = f"{valid_time.strftime('%Y%m%d_%H')}Z.png"
+                if not os.path.exists(os.path.join(OUTPUT_DIR, output_filename)):
+                    missing_hours.append(f_hour)
+            
+            if missing_hours:
+                print(f"📚 [Lauf {dwd_run_folder}Z] {len(missing_hours)} Lücke(n) entdeckt. Prüfe Server...")
+                should_process = True
+
+        # Wenn etwas verarbeitet werden muss, fragen wir den Server per HEAD
+        if should_process and missing_hours:
+            # Wir prüfen immer die Verfügbarkeit der maximalen Datei des Laufs (+14h)
+            test_url = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/V_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT014H00M.grib2"
+            
+            try:
+                response = requests.head(test_url, timeout=5)
+                if response.status_code == 200:
+                    print(f"👑 [Lauf {dwd_run_folder}Z] Server bereit. Verarbeite {len(missing_hours)} Schritte...")
+                    
+                    # Wenn wir den neuesten Lauf frisch vom Server holen, merken wir uns diesen Zeitstempel!
+                    if not newest_run_processed:
+                        detected_current_hour = target_time.strftime('%Y%m%d_%H')
+
+                    for f_hour in missing_hours:
+                        valid_time = target_time + timedelta(hours=f_hour)
+                        time_key = valid_time.strftime('%Y%m%d_%H')
+                        png_filename = f"{time_key}Z.png"
+                        
+                        # DWD URLs für U- und V-Komponente aufbauen
+                        url_u = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/U_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT{f_hour:03d}H00M.grib2"
+                        url_v = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/V_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT{f_hour:03d}H00M.grib2"
+                        
+                        u_path = os.path.join(TEMP_GRIB_DIR, f"u_{time_key}.grib2")
+                        v_path = os.path.join(TEMP_GRIB_DIR, f"v_{time_key}.grib2")
+                        
+                        print(f"   -> Downloade Schritt +{f_hour}h...")
+                        if download_file(url_u, u_path) and download_file(url_v, v_path):
+                            # An echten mathematischen Processor übergeben
+                            success = processor.process_step(u_path, v_path, time_key, png_filename)
+                            
+                            # Temporäre schwere GRIB2-Dateien sofort löschen
+                            if os.path.exists(u_path): os.remove(u_path)
+                            if os.path.exists(v_path): os.remove(v_path)
+                            
+                            if success:
+                                print(f"      ✅ Schritt +{f_hour}h erfolgreich prozessiert.")
+                        else:
+                            print(f"   ❌ Fehler beim Download von Schritt +{f_hour}h.")
+                    
+                    if not newest_run_processed:
+                        newest_run_processed = True
+                else:
+                    print(f"❌ [Lauf {dwd_run_folder}Z] Unvollständig/Nicht mehr verfügbar ({response.status_code}).")
+            except Exception as e:
+                print(f"⚠️ Netzwerkfehler: {e}")
+
+    # =========================================================================
+    # FINALES SPEICHERN & DYNAMISCHE ERSTELLUNG DER INDEX.JSON
+    # =========================================================================
+    # 1. Alle im RAM modifizierten JSON-Cluster in einem Rutsch schreiben
+    processor.flush_json_to_disk()
+
+    # 2. index.json dynamisch aus den echten Daten generieren
+    all_timestamps = []
+    if processor.cluster_memory:
+        first_cluster = next(iter(processor.cluster_memory.values()))
+        if "timeline" in first_cluster:
+            all_timestamps = list(first_cluster["timeline"].keys())
+
+    if all_timestamps:
+        index_path = os.path.join(OUTPUT_DIR, "index.json")
+        sorted_timestamps = sorted(all_timestamps)
+        
+        # --- NEU: Bestimmung der 'current_hour' mit deiner cleveren Logik ---
+        # Wenn wir einen gültigen neuesten Lauf detektiert haben und dieser in der Timeline existiert:
+        if detected_current_hour and detected_current_hour in sorted_timestamps:
+            current_hour = detected_current_hour
+        else:
+            # Absicherungs-Fallback (Falls beim allerersten Mal alles leer war)
+            if len(sorted_timestamps) >= 14:
+                current_hour = sorted_timestamps[len(sorted_timestamps) // 2]
+            else:
+                current_hour = sorted_timestamps[-1]
+
+        index_data = {
+            "available_timestamps": sorted_timestamps,
+            "current_hour": current_hour
+        }
+
+        print(f"\n📝 [Hauptprogramm] Generiere {index_path}...")
+        print(f"   -> Verfügbare Schritte im Frontend: {len(sorted_timestamps)}")
+        print(f"   -> Exakt detektierter Standard-Fokus (current_hour): {current_hour}")
+        
+        with open(index_path, "w") as f:
+            json.dump(index_data, f, indent=2)
+        print("✅ index.json erfolgreich aktualisiert!")
+    else:
+        print("⚠️ Warnung: Keine Daten-Timestamps für die index.json gefunden.")
+
+    # =========================================================================
+    # BEREINIGUNG
+    # =========================================================================
+    if os.path.exists(TEMP_GRIB_DIR):
+        shutil.rmtree(TEMP_GRIB_DIR)
+        print("🧹 Temporärer Download-Ordner wurde vollständig bereinigt!")
+
+    print("\n🎉 PIPELINE ERFOLGREICH BEENDET!")
+
+if __name__ == "__main__":
+    run_ruc_pipeline()
+    
