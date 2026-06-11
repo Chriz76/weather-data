@@ -3,6 +3,7 @@ import sys
 import requests
 import shutil
 import json
+import time  # NEU: Für das Warteintervall (Sleep)
 from datetime import datetime, timezone, timedelta
 
 # Pfad-Erweiterung für den Import (z.B. in Google Colab oder GitHub Actions)
@@ -18,16 +19,26 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(TEMP_GRIB_DIR, exist_ok=True)
 
 def download_file(url, local_path):
-    """Hilfsfunktion für echte Downloads mit Stream-Pufferung"""
-    try:
-        response = requests.get(url, timeout=15, stream=True)
-        if response.status_code == 200:
-            with open(local_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            return True
-    except Exception as e:
-        print(f"   ⚠️ Download-Fehler: {e}")
+    """Hilfsfunktion für echte Downloads mit Stream-Pufferung und 3 Retries"""
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.get(url, timeout=15, stream=True)
+            if response.status_code == 200:
+                with open(local_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                return True
+            else:
+                print(f"   ⚠️ Download-Versuch {attempt} fehlgeschlagen (Status: {response.status_code})")
+        except Exception as e:
+            print(f"   ⚠️ Download-Fehler bei Versuch {attempt}: {e}")
+        
+        if attempt < max_retries:
+            wait_time = attempt * 2  # Steigendes Intervall: 2s, 4s...
+            print(f"   ⏳ Warte {wait_time} Sekunden vor nächstem Versuch...")
+            time.sleep(wait_time)
+            
     return False
 
 def run_ruc_pipeline():
@@ -43,7 +54,8 @@ def run_ruc_pipeline():
     # --- NEU: Hier merken wir uns den echten, aktuellsten Laufzeitstempel ---
     detected_current_hour = None
 
-    for hour_offset in range(14):
+    # ANPASSUNG: Bereich von 14 auf 5 Stunden reduziert für weniger Rückblick
+    for hour_offset in range(5):
         target_time = utc_now - timedelta(hours=hour_offset)
         target_time = target_time.replace(minute=0, second=0, microsecond=0)
         dwd_run_folder = target_time.strftime("%Y-%m-%dT%H:00")
@@ -82,50 +94,67 @@ def run_ruc_pipeline():
 
         # Wenn etwas verarbeitet werden muss, fragen wir den Server per HEAD
         if should_process and missing_hours:
-            # Wir prüfen immer die Verfügbarkeit der maximalen Datei des Laufs (+14h)
             test_url = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/V_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT014H00M.grib2"
             
-            try:
-                response = requests.head(test_url, timeout=5)
-                if response.status_code == 200:
-                    print(f"👑 [Lauf {dwd_run_folder}Z] Server bereit. Verarbeite {len(missing_hours)} Schritte...")
-                    
-                    # Wenn wir den neuesten Lauf frisch vom Server holen, merken wir uns diesen Zeitstempel!
-                    if not newest_run_processed:
-                        detected_current_hour = target_time.strftime('%Y%m%d_%H')
+            # ANPASSUNG: Retry-Logik für den HEAD-Request eingebaut
+            head_success = False
+            max_head_retries = 3
+            response_code = None
+            
+            for attempt in range(1, max_head_retries + 1):
+                try:
+                    response = requests.head(test_url, timeout=5)
+                    response_code = response.status_code
+                    if response_code == 200:
+                        head_success = True
+                        break
+                    else:
+                        print(f"   ⚠️ HEAD-Versuch {attempt} fehlgeschlagen (Status: {response_code})")
+                except Exception as e:
+                    print(f"   ⚠️ HEAD-Fehler bei Versuch {attempt}: {e}")
+                
+                if attempt < max_head_retries:
+                    wait_time = attempt * 2
+                    print(f"   ⏳ Warte {wait_time} Sekunden vor nächstem HEAD-Versuch...")
+                    time.sleep(wait_time)
 
-                    for f_hour in missing_hours:
-                        valid_time = target_time + timedelta(hours=f_hour)
-                        time_key = valid_time.strftime('%Y%m%d_%H')
-                        png_filename = f"{time_key}Z.png"
-                        
-                        # DWD URLs für U- und V-Komponente aufbauen
-                        url_u = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/U_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT{f_hour:03d}H00M.grib2"
-                        url_v = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/V_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT{f_hour:03d}H00M.grib2"
-                        
-                        u_path = os.path.join(TEMP_GRIB_DIR, f"u_{time_key}.grib2")
-                        v_path = os.path.join(TEMP_GRIB_DIR, f"v_{time_key}.grib2")
-                        
-                        print(f"   -> Downloade Schritt +{f_hour}h...")
-                        if download_file(url_u, u_path) and download_file(url_v, v_path):
-                            # An echten mathematischen Processor übergeben
-                            success = processor.process_step(u_path, v_path, time_key, png_filename)
-                            
-                            # Temporäre schwere GRIB2-Dateien sofort löschen
-                            if os.path.exists(u_path): os.remove(u_path)
-                            if os.path.exists(v_path): os.remove(v_path)
-                            
-                            if success:
-                                print(f"      ✅ Schritt +{f_hour}h erfolgreich prozessiert.")
-                        else:
-                            print(f"   ❌ Fehler beim Download von Schritt +{f_hour}h.")
+            if head_success:
+                print(f"👑 [Lauf {dwd_run_folder}Z] Server bereit. Verarbeite {len(missing_hours)} Schritte...")
+                
+                # Wenn wir den neuesten Lauf frisch vom Server holen, merken wir uns diesen Zeitstempel!
+                if not newest_run_processed:
+                    detected_current_hour = target_time.strftime('%Y%m%d_%H')
+
+                for f_hour in missing_hours:
+                    valid_time = target_time + timedelta(hours=f_hour)
+                    time_key = valid_time.strftime('%Y%m%d_%H')
+                    png_filename = f"{time_key}Z.png"
                     
-                    if not newest_run_processed:
-                        newest_run_processed = True
-                else:
-                    print(f"❌ [Lauf {dwd_run_folder}Z] Unvollständig/Nicht mehr verfügbar ({response.status_code}).")
-            except Exception as e:
-                print(f"⚠️ Netzwerkfehler: {e}")
+                    # DWD URLs für U- und V-Komponente aufbauen
+                    url_u = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/U_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT{f_hour:03d}H00M.grib2"
+                    url_v = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/V_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT{f_hour:03d}H00M.grib2"
+                    
+                    u_path = os.path.join(TEMP_GRIB_DIR, f"u_{time_key}.grib2")
+                    v_path = os.path.join(TEMP_GRIB_DIR, f"v_{time_key}.grib2")
+                    
+                    print(f"   -> Downloade Schritt +{f_hour}h...")
+                    if download_file(url_u, u_path) and download_file(url_v, v_path):
+                        # An echten mathematischen Processor übergeben
+                        success = processor.process_step(u_path, v_path, time_key, png_filename)
+                        
+                        # Temporäre schwere GRIB2-Dateien sofort löschen
+                        if os.path.exists(u_path): os.remove(u_path)
+                        if os.path.exists(v_path): os.remove(v_path)
+                        
+                        if success:
+                            print(f"      ✅ Schritt +{f_hour}h erfolgreich prozessiert.")
+                    else:
+                        print(f"   ❌ Fehler beim Download von Schritt +{f_hour}h.")
+                
+                if not newest_run_processed:
+                    newest_run_processed = True
+            else:
+                print(f"❌ [Lauf {dwd_run_folder}Z] Unvollständig/Nicht mehr verfügbar (Letzter Status: {response_code}).")
 
     # =========================================================================
     # FINALES SPEICHERN & DYNAMISCHE ERSTELLUNG DER INDEX.JSON
@@ -144,18 +173,19 @@ def run_ruc_pipeline():
         index_path = os.path.join(OUTPUT_DIR, "index.json")
         sorted_timestamps = sorted(all_timestamps)
         
-        # --- NEU: Bestimmung der 'current_hour' mit deiner cleveren Logik ---
-        # Wenn wir einen gültigen neuesten Lauf detektiert haben und dieser in der Timeline existiert:
+        # --- Bestimmung der 'current_hour' ---
         if detected_current_hour and detected_current_hour in sorted_timestamps:
             current_hour = detected_current_hour
         else:
-            # Absicherungs-Fallback (Falls beim allerersten Mal alles leer war)
+            # Fallback
             if len(sorted_timestamps) >= 14:
                 current_hour = sorted_timestamps[len(sorted_timestamps) // 2]
             else:
                 current_hour = sorted_timestamps[-1]
 
+        # ANPASSUNG: "generated_at" Zeitpunkt hinzugefügt
         index_data = {
+            "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "available_timestamps": sorted_timestamps,
             "current_hour": current_hour
         }
@@ -163,6 +193,7 @@ def run_ruc_pipeline():
         print(f"\n📝 [Hauptprogramm] Generiere {index_path}...")
         print(f"   -> Verfügbare Schritte im Frontend: {len(sorted_timestamps)}")
         print(f"   -> Exakt detektierter Standard-Fokus (current_hour): {current_hour}")
+        print(f"   -> Generierungszeitpunkt: {index_data['generated_at']}")
         
         with open(index_path, "w") as f:
             json.dump(index_data, f, indent=2)
@@ -181,4 +212,3 @@ def run_ruc_pipeline():
 
 if __name__ == "__main__":
     run_ruc_pipeline()
-    
