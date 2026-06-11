@@ -171,8 +171,8 @@ class WindProcessor:
             # Im RAM erweitern
             self.cluster_memory[cluster_key]["timeline"][time_key] = cluster_winds
 
-            # Hard-Rotation auf 28 Stunden direkt im RAM
-            if len(self.cluster_memory[cluster_key]["timeline"]) > 28:
+            # Hard-Rotation auf 19 Stunden direkt im RAM
+            if len(self.cluster_memory[cluster_key]["timeline"]) > 19:
                 sorted_keys = sorted(self.cluster_memory[cluster_key]["timeline"].keys())
                 del self.cluster_memory[cluster_key]["timeline"][sorted_keys[0]]
                 
