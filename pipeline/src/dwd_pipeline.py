@@ -3,10 +3,10 @@ import sys
 import requests
 import shutil
 import json
-import time  # NEU: Für das Warteintervall (Sleep)
+import time  
 from datetime import datetime, timezone, timedelta
 
-# Pfad-Erweiterung für den Import (z.B. in Google Colab oder GitHub Actions)
+# Pfad-Erweiterung für den Import
 sys.path.append(os.path.dirname(__file__))
 from process import WindProcessor
 
@@ -47,14 +47,12 @@ def run_ruc_pipeline():
     print(f"START PIPELINE - Aktuelle UTC Zeit: {utc_now.strftime('%Y-%m-%d %H:%M:%S')}Z")
     print(f"========================================================")
 
-    # Erstelle den Prozessor (Lädt die optimierte Gewichtungsmatrix)
+    # Erstelle den Prozessor
     processor = WindProcessor(root_folder=ROOT_FOLDER, output_folder=OUTPUT_DIR)
     newest_run_processed = False
-    
-    # --- NEU: Hier merken wir uns den echten, aktuellsten Laufzeitstempel ---
     detected_current_hour = None
 
-    # ANPASSUNG: Bereich von 14 auf 5 Stunden reduziert für weniger Rückblick
+    # Bereich von 14 auf 5 Stunden reduziert für weniger Rückblick
     for hour_offset in range(5):
         target_time = utc_now - timedelta(hours=hour_offset)
         target_time = target_time.replace(minute=0, second=0, microsecond=0)
@@ -65,7 +63,6 @@ def run_ruc_pipeline():
         final_output_filename = f"{final_valid_time.strftime('%Y%m%d_%H')}Z.png"
         final_output_path = os.path.join(OUTPUT_DIR, final_output_filename)
 
-        # Verarbeitungs-Modus entscheiden (Modus A oder Modus B)
         should_process = False
         missing_hours = []
 
@@ -73,7 +70,6 @@ def run_ruc_pipeline():
             if os.path.exists(final_output_path):
                 print(f"💾 [Lauf {dwd_run_folder}Z] Bereits komplett vorhanden. (Wechsle in Historie-Modus)")
                 newest_run_processed = True
-                # Wenn er schon da ist, ist das unsere aktuelle Basis-Stunde (Gegenwart für die App)
                 detected_current_hour = target_time.strftime('%Y%m%d_%H')
             else:
                 print(f"📡 [Lauf {dwd_run_folder}Z] Fehlt lokal. Prüfe DWD Server...")
@@ -96,32 +92,44 @@ def run_ruc_pipeline():
         if should_process and missing_hours:
             test_url = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/V_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT014H00M.grib2"
             
-            # ANPASSUNG: Retry-Logik für den HEAD-Request eingebaut
             head_success = False
-            max_head_retries = 3
             response_code = None
             
-            for attempt in range(1, max_head_retries + 1):
-                try:
-                    response = requests.head(test_url, timeout=5)
-                    response_code = response.status_code
-                    if response_code == 200:
-                        head_success = True
-                        break
-                    else:
-                        print(f"   ⚠️ HEAD-Versuch {attempt} fehlgeschlagen (Status: {response_code})")
-                except Exception as e:
-                    print(f"   ⚠️ HEAD-Fehler bei Versuch {attempt}: {e}")
+            # --- NEU: INTELLIGENTE WARTESCHLEIFE FÜR DEN AKTUELLSTEN LAUF (hour_offset == 0) ---
+            max_wait_attempts = 3 if hour_offset == 0 else 1
+            wait_delay_seconds = 300  # 5 Minuten Splitting-Intervall
+            
+            for wait_attempt in range(1, max_wait_attempts + 1):
+                if wait_attempt > 1:
+                    print(f"   ⏰ [Retry-Schleife] Versuche es erneut in {wait_delay_seconds // 60} Minuten... (Versuch {wait_attempt}/{max_wait_attempts})")
+                    time.sleep(wait_delay_seconds)
                 
-                if attempt < max_head_retries:
-                    wait_time = attempt * 2
-                    print(f"   ⏳ Warte {wait_time} Sekunden vor nächstem HEAD-Versuch...")
-                    time.sleep(wait_time)
+                # HEAD-Check innerhalb des aktuellen Versuchs (mit schnellen 3 internen Retries bei Netzwerk-Schluckauf)
+                max_head_retries = 3
+                for attempt in range(1, max_head_retries + 1):
+                    try:
+                        response = requests.head(test_url, timeout=8) # Leicht erhöhtes Timeout
+                        response_code = response.status_code
+                        if response_code == 200:
+                            head_success = True
+                            break
+                        else:
+                            print(f"   ⚠️ HEAD-Check {attempt} ergab Statuscode: {response_code}")
+                    except Exception as e:
+                        print(f"   ⚠️ HEAD-Verbindungsfehler bei Check {attempt}: {e}")
+                    
+                    if attempt < max_head_retries:
+                        time.sleep(3) # Kurze Atempause bei direktem Verbindungsfehler
+                
+                # Wenn der Server bereit ist (200 OK), brechen wir die 5-Minuten-Warteschleife sofort ab!
+                if head_success:
+                    break
+                elif hour_offset == 0 and wait_attempt < max_wait_attempts:
+                    print(f"   ❌ [Lauf {dwd_run_folder}Z] Noch nicht auf dem DWD-Server verfügbar (Status: {response_code or 'Timeout'}).")
 
             if head_success:
-                print(f"👑 [Lauf {dwd_run_folder}Z] Server bereit. Verarbeite {len(missing_hours)} Schritte...")
+                print(f"👑 [Lauf {dwd_run_folder}Z] Server bereit! Starte jetzt die Verarbeitung von {len(missing_hours)} Schritten...")
                 
-                # Wenn wir den neuesten Lauf frisch vom Server holen, merken wir uns diesen Zeitstempel!
                 if not newest_run_processed:
                     detected_current_hour = target_time.strftime('%Y%m%d_%H')
 
@@ -130,7 +138,6 @@ def run_ruc_pipeline():
                     time_key = valid_time.strftime('%Y%m%d_%H')
                     png_filename = f"{time_key}Z.png"
                     
-                    # DWD URLs für U- und V-Komponente aufbauen
                     url_u = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/U_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT{f_hour:03d}H00M.grib2"
                     url_v = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/V_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT{f_hour:03d}H00M.grib2"
                     
@@ -139,10 +146,8 @@ def run_ruc_pipeline():
                     
                     print(f"   -> Downloade Schritt +{f_hour}h...")
                     if download_file(url_u, u_path) and download_file(url_v, v_path):
-                        # An echten mathematischen Processor übergeben
                         success = processor.process_step(u_path, v_path, time_key, png_filename)
                         
-                        # Temporäre schwere GRIB2-Dateien sofort löschen
                         if os.path.exists(u_path): os.remove(u_path)
                         if os.path.exists(v_path): os.remove(v_path)
                         
@@ -154,15 +159,13 @@ def run_ruc_pipeline():
                 if not newest_run_processed:
                     newest_run_processed = True
             else:
-                print(f"❌ [Lauf {dwd_run_folder}Z] Unvollständig/Nicht mehr verfügbar (Letzter Status: {response_code}).")
+                print(f"❌ [Lauf {dwd_run_folder}Z] Daten final nicht verfügbar (Letzter Status: {response_code}). Wechsle permanent in Historie-Modus.")
 
     # =========================================================================
     # FINALES SPEICHERN & DYNAMISCHE ERSTELLUNG DER INDEX.JSON
     # =========================================================================
-    # 1. Alle im RAM modifizierten JSON-Cluster in einem Rutsch schreiben
     processor.flush_json_to_disk()
 
-    # 2. index.json dynamisch aus den echten Daten generieren
     all_timestamps = []
     if processor.cluster_memory:
         first_cluster = next(iter(processor.cluster_memory.values()))
@@ -173,17 +176,14 @@ def run_ruc_pipeline():
         index_path = os.path.join(OUTPUT_DIR, "index.json")
         sorted_timestamps = sorted(all_timestamps)
         
-        # --- Bestimmung der 'current_hour' ---
         if detected_current_hour and detected_current_hour in sorted_timestamps:
             current_hour = detected_current_hour
         else:
-            # Fallback
             if len(sorted_timestamps) >= 14:
                 current_hour = sorted_timestamps[len(sorted_timestamps) // 2]
             else:
                 current_hour = sorted_timestamps[-1]
 
-        # ANPASSUNG: "generated_at" Zeitpunkt hinzugefügt
         index_data = {
             "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "available_timestamps": sorted_timestamps,
@@ -193,7 +193,6 @@ def run_ruc_pipeline():
         print(f"\n📝 [Hauptprogramm] Generiere {index_path}...")
         print(f"   -> Verfügbare Schritte im Frontend: {len(sorted_timestamps)}")
         print(f"   -> Exakt detektierter Standard-Fokus (current_hour): {current_hour}")
-        print(f"   -> Generierungszeitpunkt: {index_data['generated_at']}")
         
         with open(index_path, "w") as f:
             json.dump(index_data, f, indent=2)
@@ -201,9 +200,6 @@ def run_ruc_pipeline():
     else:
         print("⚠️ Warnung: Keine Daten-Timestamps für die index.json gefunden.")
 
-    # =========================================================================
-    # BEREINIGUNG
-    # =========================================================================
     if os.path.exists(TEMP_GRIB_DIR):
         shutil.rmtree(TEMP_GRIB_DIR)
         print("🧹 Temporärer Download-Ordner wurde vollständig bereinigt!")
