@@ -74,8 +74,9 @@ class WindProcessor:
         
         self.interpolator = LinearNDInterpolator(points_merc, np.zeros(self.total_dwd_points, dtype=np.float64))
 
-        cluster_cols = np.floor((lon_deg - lon_min) / 2.0).astype(np.int32)
-        cluster_rows = np.floor((lat_deg - lat_min) / 2.0).astype(np.int32)
+        cluster_size = 1.0
+        cluster_cols = np.floor((lon_deg - lon_min) / cluster_size).astype(np.int32)
+        cluster_rows = np.floor((lat_deg - lat_min) / cluster_size).astype(np.int32)
         unique_clusters = np.unique(np.column_stack((cluster_cols, cluster_rows)), axis=0)
 
         self.cluster_mapping = {}
@@ -112,8 +113,11 @@ class WindProcessor:
 
         # Windgeschwindigkeit in Knoten berechnen
         wind_pts = np.sqrt(u_values**2 + v_values**2) * 1.94384
+        wind_dir_rad = np.arctan2(u_values, v_values)
+        wind_dir_deg = (np.degrees(wind_dir_rad) + 180.0) % 360.0
         min_len = min(self.total_dwd_points, len(wind_pts))
         current_wind_pts = wind_pts[:min_len].astype(np.float64)
+        current_wind_dirs = wind_dir_deg[:min_len].astype(np.float64)
 
         # ---------------------------------------------------------------------
         # TEIL A: PNG GENERIERUNG
@@ -155,11 +159,14 @@ class WindProcessor:
                 if os.path.exists(cluster_filename):
                     with open(cluster_filename, "r") as jf:
                         self.cluster_memory[cluster_key] = json.load(jf)
+                        if "directions" not in self.cluster_memory[cluster_key]:
+                            self.cluster_memory[cluster_key]["directions"] = {}
                 else:
                     self.cluster_memory[cluster_key] = {
                         "col": col, "row": row,
                         "lats": meta["lats"], "lons": meta["lons"],
-                        "timeline": {}
+                        "timeline": {},
+                        "directions": {}
                     }
 
             idx = meta["indices"]
@@ -167,14 +174,22 @@ class WindProcessor:
                 None if np.isnan(w) else round(float(w), 1)
                 for w in current_wind_pts[idx]
             ]
+            cluster_dirs = [
+                None if np.isnan(d) else int(round(float(d)))
+                for d in current_wind_dirs[idx]
+            ]
             
             # Im RAM erweitern
             self.cluster_memory[cluster_key]["timeline"][time_key] = cluster_winds
+            self.cluster_memory[cluster_key]["directions"][time_key] = cluster_dirs
 
             # Hard-Rotation auf 19 Stunden direkt im RAM
-            if len(self.cluster_memory[cluster_key]["timeline"]) > 19:
+            while len(self.cluster_memory[cluster_key]["timeline"]) > 19:
                 sorted_keys = sorted(self.cluster_memory[cluster_key]["timeline"].keys())
-                del self.cluster_memory[cluster_key]["timeline"][sorted_keys[0]]
+                oldest_key = sorted_keys[0]
+                del self.cluster_memory[cluster_key]["timeline"][oldest_key]
+                if oldest_key in self.cluster_memory[cluster_key]["directions"]:
+                    del self.cluster_memory[cluster_key]["directions"][oldest_key]
                 
         return True
     def flush_json_to_disk(self):
