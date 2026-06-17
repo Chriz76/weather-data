@@ -148,12 +148,19 @@ class WindProcessor:
         img.save(output_image_path)
 
         # ---------------------------------------------------------------------
-        # TEIL B: JSON-UPDATE IM RAM PUFFERN (Keine Festplattenlast!)
+        # TEIL B: JSON-UPDATE IM RAM PUFFERN (Optimiert & Vektoriell!)
         # ---------------------------------------------------------------------
+        # 1. Globale Vorverarbeitung aller Punkte mit schnellem NumPy
+        # Ersetzt NaN durch None direkt beim Erstellen der Listen (über einen Kniff)
+        # Oder wir runden alles vorab:
+        winds_rounded = np.where(np.isnan(current_wind_pts), -999, np.round(current_wind_pts, 1))
+        dirs_rounded = np.where(np.isnan(current_wind_dirs), -999, np.round(current_wind_dirs))
+
+        # 2. Schleife über die Cluster (jetzt ohne schwere Rechenlast)
         for (col, row), meta in self.cluster_mapping.items():
             cluster_key = f"{col}_{row}"
             
-            # Wenn das Cluster noch nicht im RAM-Puffer ist, initialisieren
+            # Puffer-Initialisierung (Nutzt den RAM-Cache)
             if cluster_key not in self.cluster_memory:
                 cluster_filename = os.path.join(self.cluster_output_folder, f"cluster_{cluster_key}.json")
                 if os.path.exists(cluster_filename):
@@ -165,29 +172,30 @@ class WindProcessor:
                     self.cluster_memory[cluster_key] = {
                         "col": col, "row": row,
                         "lats": meta["lats"], "lons": meta["lons"],
-                        "timeline": {},
-                        "directions": {}
+                        "timeline": {}, "directions": {}
                     }
 
             idx = meta["indices"]
-            cluster_winds = [
-                None if np.isnan(w) else round(float(w), 1)
-                for w in current_wind_pts[idx]
-            ]
-            cluster_dirs = [
-                None if np.isnan(d) else int(round(float(d)))
-                for d in current_wind_dirs[idx]
-            ]
             
-            # Im RAM erweitern
+            # Slicing der bereits fertig berechneten NumPy-Arrays (Blitzschnell)
+            c_winds = winds_rounded[idx]
+            c_dirs = dirs_rounded[idx]
+
+            # In native Python-Typen konvertieren und -999 zurück zu None wandeln
+            cluster_winds = [None if w == -999 else float(w) for w in c_winds]
+            cluster_dirs = [None if d == -999 else int(d) for d in c_dirs]
+            
+            # Daten im RAM zuweisen
             self.cluster_memory[cluster_key]["timeline"][time_key] = cluster_winds
             self.cluster_memory[cluster_key]["directions"][time_key] = cluster_dirs
 
-            # Hard-Rotation auf 19 Stunden direkt im RAM
-            while len(self.cluster_memory[cluster_key]["timeline"]) > 19:
-                sorted_keys = sorted(self.cluster_memory[cluster_key]["timeline"].keys())
-                oldest_key = sorted_keys[0]
-                del self.cluster_memory[cluster_key]["timeline"][oldest_key]
+            # Optimierte Rotation: Da wir chronologisch einfügen, 
+            # ist der älteste Eintrag immer der erste nach dem Sortieren der Keys.
+            # Wenn wir wissen, dass wir > 19 sind, löschen wir einfach das älteste.
+            timeline_dict = self.cluster_memory[cluster_key]["timeline"]
+            if len(timeline_dict) > 19:
+                oldest_key = min(timeline_dict.keys()) # min() ist schneller als sorted()
+                del timeline_dict[oldest_key]
                 if oldest_key in self.cluster_memory[cluster_key]["directions"]:
                     del self.cluster_memory[cluster_key]["directions"][oldest_key]
                 
