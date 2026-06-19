@@ -1,3 +1,5 @@
+%%writefile /content/process.py
+
 import os
 import json
 import pickle
@@ -10,23 +12,86 @@ import time # Import time for detailed logging
 
 
 class WindProcessor:
-    # Modified __init__ to accept index_payload directly
-    def __init__(self, index_payload, output_folder="./wind_tiles_simulation"):
+    # Modified __init__ to accept root_folder directly
+    def __init__(self, root_folder, output_folder="./wind_tiles_simulation"):
         init_start_time = time.perf_counter()
         self.output_folder = output_folder
         self.cluster_output_folder = os.path.join(output_folder, "grid_cluster")
         os.makedirs(self.cluster_output_folder, exist_ok=True);
+        self.root_folder = root_folder # Store root_folder
 
         self.cluster_memory = {}
 
-        # Initialize static attributes from the provided index_payload
-        self.width = index_payload["metadata"]["width"]
-        self.height = index_payload["metadata"]["height"]
-        self.total_dwd_points = index_payload["metadata"]["total_dwd_points"]
-        self.interpolator = index_payload["png_rendering"]["interpolator"]
-        self.grid_x = index_payload["png_rendering"]["grid_x"]
-        self.grid_y = index_payload["png_rendering"]["grid_y"]
-        self.cluster_mapping = index_payload["json_clustering"]
+        # --- Geometry and Interpolator Generation (moved from pre-computation) ---
+        clat_path = os.path.join(self.root_folder, "clat.grib2")
+        clon_path = os.path.join(self.root_folder, "clon.grib2")
+
+        if not os.path.exists(clat_path) or not os.path.exists(clon_path):
+            raise FileNotFoundError(f"Geometry files missing in folder: {self.root_folder}")
+
+        with open(clat_path, "rb") as f:
+            gid = ecc.codes_grib_new_from_file(f)
+            raw_lat = ecc.codes_get_array(gid, "values")
+            ecc.codes_release(gid)
+
+        with open(clon_path, "rb") as f:
+            gid = ecc.codes_grib_new_from_file(f)
+            raw_lon = ecc.codes_get_array(gid, "values")
+            ecc.codes_release(gid)
+
+        if max(abs(raw_lat)) < 7:
+            lat_deg = raw_lat * (180.0 / np.pi)
+            lon_deg = raw_lon * (180.0 / np.pi)
+        else:
+            lat_deg = raw_lat
+            lon_deg = raw_lon
+        lon_deg = np.where(lon_deg > 180, lon_deg - 360, lon_deg)
+
+        lon_min, lon_max = -4.1616, 20.5444
+        lat_min, lat_max = 43.0440, 58.1647
+
+        lat_pts_rad = np.radians(lat_deg)
+        y_pts_merc = np.degrees(np.log(np.tan(np.pi/4.0 + lat_pts_rad/2.0)))
+        x_pts_merc = lon_deg
+
+        y_min_merc = np.degrees(np.log(np.tan(np.pi/4.0 + np.radians(lat_min)/2.0)))
+        y_max_merc = np.degrees(np.log(np.tan(np.pi/4.0 + np.radians(lat_max)/2.0)))
+
+        self.width = 2000 # Assign to self
+        self.height = int(self.width * (y_max_merc - y_min_merc) / (lon_max - lon_min)) # Assign to self
+
+        grid_x_linear = np.linspace(lon_min, lon_max, self.width)
+        grid_y_merc = np.linspace(y_max_merc, y_min_merc, self.height)
+        self.grid_x, self.grid_y = np.meshgrid(grid_x_linear, grid_y_merc) # Assign to self
+
+        points_merc = np.vstack((x_pts_merc, y_pts_merc)).T.astype(np.float64)
+        self.total_dwd_points = len(points_merc) # Assign to self
+
+        self.interpolator = LinearNDInterpolator(points_merc, np.zeros(self.total_dwd_points, dtype=np.float64)) # Assign to self
+
+        # Cluster mapping logic
+        cluster_cols = np.floor((lon_deg - lon_min) / 1.0).astype(np.int32)
+        cluster_rows = np.floor((lat_deg - lat_min) / 1.0).astype(np.int32)
+
+        unique_clusters = np.unique(np.column_stack((cluster_cols, cluster_rows)), axis=0)
+
+        self.cluster_mapping = {} # Assign to self
+        for col, row in unique_clusters:
+            point_indices = np.where((cluster_cols == col) & (cluster_rows == row))[0]
+            self.cluster_mapping[(int(col), int(row))] = {
+                "indices": point_indices,
+                "lats": np.round(lat_deg[point_indices], 4).tolist(),
+                "lons": np.round(lon_deg[point_indices], 4).tolist()
+            }
+        # --- End of Geometry and Interpolator Generation ---
+
+        # Perform SciPy warmup after interpolator is created
+        scipy_warmup_start_init = time.perf_counter()
+        dummy_input_warmup = np.zeros((self.total_dwd_points, 1), dtype=np.float64)
+        self.interpolator.values = dummy_input_warmup
+        _ = self.interpolator(self.grid_x, self.grid_y)
+        scipy_warmup_duration_init = time.perf_counter() - scipy_warmup_start_init
+        print(f"   ⏱️ SciPy Interpolator Warmup (in init): {scipy_warmup_duration_init:.4f}s")
 
         init_duration = time.perf_counter() - init_start_time;
         print(f"✅ [Processor] Gitter reaktiviert: {self.width}x{self.height} Pixel | {len(self.cluster_mapping)} Cluster bereit. (Init time: {init_duration:.4f}s)")
@@ -135,7 +200,7 @@ class WindProcessor:
         # Create an array of integer indices using np.select.
         # default=0 means NaNs and any other values not matching a condition will get the transparent color (color_palette[0]).
         selected_color_indices = np.select(conditions, choices_indices, default=0);
-        
+
         # Map these indices to the actual RGBA values
         img_array = color_palette[selected_color_indices];
 
@@ -176,7 +241,7 @@ class WindProcessor:
             ];
 
             # Im RAM erweitern
-            self.cluster_memory[cluster_key]["timeline"][time_key] = cluster_winds;
+            self.cluster_memory[cluster_key][time_key] = cluster_winds;
 
             # Hard-Rotation auf 19 Stunden direkt im RAM
             if len(self.cluster_memory[cluster_key]["timeline"]) > 19:
