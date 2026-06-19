@@ -21,7 +21,7 @@ TEMP_GRIB_DIR = "./grib_temp"
 # INDEX_DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "warmed_static_weather_indices_dense.pkl")
 
 # ROOT_FOLDER now points to where clat.grib2 and clon.grib2 are expected
-ROOT_FOLDER = "/content/"
+ROOT_FOLDER = os.path.dirname(__file__)
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(TEMP_GRIB_DIR, exist_ok=True)
