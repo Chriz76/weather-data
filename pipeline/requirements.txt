@@ -1,7 +1,7 @@
-requests
-eccodes
-numpy
-scipy
-Pillow
-xarray
+eccodes-python
 cfgrib
+xarray
+numpy
+Pillow
+scipy
+requests
