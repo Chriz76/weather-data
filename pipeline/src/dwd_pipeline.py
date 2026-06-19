@@ -5,7 +5,7 @@ import shutil
 import json
 import time
 from datetime import datetime, timezone, timedelta
-import pickle # Added for loading index_payload
+# import pickle # Removed for loading index_payload
 
 # Add the current script's directory to sys.path to find process.py
 sys.path.append(os.path.dirname(__file__))
@@ -17,17 +17,21 @@ OUTPUT_DIR = "./output"
 TEMP_GRIB_DIR = "./grib_temp"
 
 # Path to the warmed-up index.
-# Assumes 'dwd_pipeline.py' is in 'pipeline/src' and 'warmed_static_weather_indices_dense.pkl' is in 'pipeline/data'.
-INDEX_DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "warmed_static_weather_indices_dense.pkl")
+# This part is removed as WindProcessor now handles geometry loading internally.
+# INDEX_DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "warmed_static_weather_indices_dense.pkl")
+
+# ROOT_FOLDER now points to where clat.grib2 and clon.grib2 are expected
+ROOT_FOLDER = "/content/"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(TEMP_GRIB_DIR, exist_ok=True)
 
 # Load the warmed-up static weather indices
-print(f"--- Loading warmed-up static weather indices from {INDEX_DATA_PATH} ---")
-with open(INDEX_DATA_PATH, "rb") as f:
-    index_payload = pickle.load(f)
-print("✅ Warmed-up static weather indices loaded.")
+# This block is removed as WindProcessor now handles this internally.
+# print(f"--- Loading warmed-up static weather indices from {INDEX_DATA_PATH} ---")
+# with open(INDEX_DATA_PATH, "rb") as f:
+#     index_payload = pickle.load(f)
+# print("✅ Warmed-up static weather indices loaded.")
 
 
 def download_file(url, local_path):
@@ -59,9 +63,8 @@ def run_ruc_pipeline():
     print(f"START PIPELINE - Current UTC Time: {utc_now.strftime('%Y-%m-%d %H:%M:%S')}Z")
     print(f"========================================================")
 
-    # Initialize WindProcessor with the pre-loaded index_payload
-    # ROOT_FOLDER is no longer needed as index_payload is passed directly
-    processor = WindProcessor(index_payload=index_payload, output_folder=OUTPUT_DIR)
+    # Initialize WindProcessor, passing the root_folder where clat.grib2 and clon.grib2 are located
+    processor = WindProcessor(root_folder=ROOT_FOLDER, output_folder=OUTPUT_DIR)
     # The cluster_output_folder for the processor needs to be relative to OUTPUT_DIR
     processor.cluster_output_folder = os.path.join(OUTPUT_DIR, "grid_cluster")
     os.makedirs(processor.cluster_output_folder, exist_ok=True) # Ensure it exists
