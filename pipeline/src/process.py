@@ -1,5 +1,3 @@
-%%writefile /content/process.py
-
 import os
 import json
 import pickle
