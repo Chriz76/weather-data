@@ -47,7 +47,13 @@ jobs:
         # The script evaluates existing data in './output' to perform gap-detection
         # and incrementally updates the dataset along with index.json.
 
-      - name: Clean and Force-Push Data Branch (gh-pages)
+      - name: Inject Netlify Headers
+        run: |
+          echo "/*" > output/_headers
+          echo "  Access-Control-Allow-Origin: *" >> output/_headers
+          echo "  Access-Control-Allow-Headers: Content-Type, Authorization" >> output/_headers
+
+      - name: Clean and Force-Push Data Branch (gh-pages-dev)
         run: |
           # Navigate into the processed output directory
           cd output
@@ -64,7 +70,7 @@ jobs:
           git add -A
           git commit -m "DWD Weather Pipeline - Live State [skip ci]"
           
-          # Force-push to overwrite the 'gh-pages' branch, keeping the commit history flat 
+          # Force-push to overwrite the 'gh-pages-dev' branch, keeping the commit history flat 
           # and serving the assets directly from the repository root for GitHub Pages.
           git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
           git push --force origin gh-pages-dev
