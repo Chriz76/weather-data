@@ -6,21 +6,19 @@ import numpy as np
 from PIL import Image
 import eccodes as ecc
 from scipy.interpolate import LinearNDInterpolator
-import time # Import time for detailed logging
+import time 
 
 
 class WindProcessor:
-    # Modified __init__ to accept root_folder directly
     def __init__(self, root_folder, output_folder="./wind_tiles_simulation"):
         init_start_time = time.perf_counter()
         self.output_folder = output_folder
         self.cluster_output_folder = os.path.join(output_folder, "grid_cluster")
         os.makedirs(self.cluster_output_folder, exist_ok=True)
-        self.root_folder = root_folder # Store root_folder
+        self.root_folder = root_folder 
 
         self.cluster_memory = {}
 
-        # --- Geometry and Interpolator Generation (moved from pre-computation) ---
         clat_path = os.path.join(self.root_folder, "clat.grib2")
         clon_path = os.path.join(self.root_folder, "clon.grib2")
 
@@ -55,25 +53,24 @@ class WindProcessor:
         y_min_merc = np.degrees(np.log(np.tan(np.pi/4.0 + np.radians(lat_min)/2.0)))
         y_max_merc = np.degrees(np.log(np.tan(np.pi/4.0 + np.radians(lat_max)/2.0)))
 
-        self.width = 2000 # Assign to self
-        self.height = int(self.width * (y_max_merc - y_min_merc) / (lon_max - lon_min)) # Assign to self
+        self.width = 2000 
+        self.height = int(self.width * (y_max_merc - y_min_merc) / (lon_max - lon_min)) 
 
         grid_x_linear = np.linspace(lon_min, lon_max, self.width)
         grid_y_merc = np.linspace(y_max_merc, y_min_merc, self.height)
-        self.grid_x, self.grid_y = np.meshgrid(grid_x_linear, grid_y_merc) # Assign to self
+        self.grid_x, self.grid_y = np.meshgrid(grid_x_linear, grid_y_merc) 
 
         points_merc = np.vstack((x_pts_merc, y_pts_merc)).T.astype(np.float64)
-        self.total_dwd_points = len(points_merc) # Assign to self
+        self.total_dwd_points = len(points_merc) 
 
-        self.interpolator = LinearNDInterpolator(points_merc, np.zeros(self.total_dwd_points, dtype=np.float64)) # Assign to self
+        self.interpolator = LinearNDInterpolator(points_merc, np.zeros(self.total_dwd_points, dtype=np.float64)) 
 
-        # Cluster mapping logic
         cluster_cols = np.floor((lon_deg - lon_min) / 1.0).astype(np.int32)
         cluster_rows = np.floor((lat_deg - lat_min) / 1.0).astype(np.int32)
 
         unique_clusters = np.unique(np.column_stack((cluster_cols, cluster_rows)), axis=0)
 
-        self.cluster_mapping = {} # Assign to self
+        self.cluster_mapping = {} 
         for col, row in unique_clusters:
             point_indices = np.where((cluster_cols == col) & (cluster_rows == row))[0]
             self.cluster_mapping[(int(col), int(row))] = {
@@ -81,24 +78,18 @@ class WindProcessor:
                 "lats": np.round(lat_deg[point_indices], 4).tolist(),
                 "lons": np.round(lon_deg[point_indices], 4).tolist()
             }
-        # --- End of Geometry and Interpolator Generation ---
 
-        # Perform SciPy warmup after interpolator is created
         scipy_warmup_start_init = time.perf_counter()
         dummy_input_warmup = np.zeros((self.total_dwd_points, 1), dtype=np.float64)
         self.interpolator.values[:, 0] = dummy_input_warmup[:, 0]
         _ = self.interpolator(self.grid_x, self.grid_y)
         scipy_warmup_duration_init = time.perf_counter() - scipy_warmup_start_init
-        print(f"   ⏱️ SciPy Interpolator Warmup (in init): {scipy_warmup_duration_init:.4f}s")
+        print(f"    ⏱️ SciPy Interpolator Warmup (in init): {scipy_warmup_duration_init:.4f}s")
 
         init_duration = time.perf_counter() - init_start_time
         print(f"✅ [Processor] Gitter reaktiviert: {self.width}x{self.height} Pixel | {len(self.cluster_mapping)} Cluster bereit. (Init time: {init_duration:.4f}s)")
 
     def process_step(self, u_path, v_path, time_key, png_filename):
-        """
-        Verarbeitet einen einzelnen Zeitschritt (U- und V-GRIB2-Datei).
-        Generiert das PNG direkt und puffert das JSON-Update im RAM.
-        """
         step_start_time = time.perf_counter()
 
         if not os.path.exists(u_path) or not os.path.exists(v_path):
@@ -107,27 +98,21 @@ class WindProcessor:
 
         print(f"-> Berechne Wind & interpoliere für {png_filename}...")
 
-        # 1. GRIB-Daten einlesen
         grib_load_start = time.perf_counter()
-
-        # Read u-component values
         with open(u_path, 'rb') as f:
             gid_u = ecc.codes_grib_new_from_file(f)
             u_values = ecc.codes_get_array(gid_u, 'values')
             try:
-                # Get missingValue from GRIB message and replace in array
                 u_missing_value = ecc.codes_get(gid_u, 'missingValue')
                 u_values[u_values == u_missing_value] = np.nan
             except ecc.CodesInternalError:
                 pass
             ecc.codes_release(gid_u)
 
-        # Read v-component values
         with open(v_path, 'rb') as f:
             gid_v = ecc.codes_grib_new_from_file(f)
             v_values = ecc.codes_get_array(gid_v, 'values')
             try:
-                # Get missingValue from GRIB message and replace in array
                 v_missing_value = ecc.codes_get(gid_v, 'missingValue')
                 v_values[v_values == v_missing_value] = np.nan
             except ecc.CodesInternalError:
@@ -135,27 +120,21 @@ class WindProcessor:
             ecc.codes_release(gid_v)
 
         grib_load_duration = time.perf_counter() - grib_load_start
-        print(f"   ⏱️ GRIB-Ladezeit: {grib_load_duration:.4f}s")
+        print(f"    ⏱️ GRIB-Ladezeit: {grib_load_duration:.4f}s")
 
-        # Windgeschwindigkeit und -richtung berechnen
         wind_calc_start = time.perf_counter()
-        
-        # Geschwindigkeit in Knoten
         wind_pts = np.sqrt(u_values**2 + v_values**2) * 1.94384
         min_len = min(self.total_dwd_points, len(wind_pts))
         current_wind_pts = wind_pts[:min_len].astype(np.float64)
         
-        # Meteorologische Windrichtung (Woher der Wind weht: 0°=Nord, 90°=Ost, 180°=Süd, 270°=West)
-        # np.arctan2(v, u) erwartet (y, x). Ein mathematischer Winkel wird zu meteorologischen Grad transformiert.
         u_slice = u_values[:min_len].astype(np.float64)
         v_slice = v_values[:min_len].astype(np.float64)
         raw_dir_deg = 270.0 - np.degrees(np.arctan2(v_slice, u_slice))
         wind_dir_pts = np.mod(raw_dir_deg, 360.0)
 
         wind_calc_duration = time.perf_counter() - wind_calc_start
-        print(f"   ⏱️ Windberechnung (Knots & Richtung): {wind_calc_duration:.4f}s")
+        print(f"    ⏱️ Windberechnung (Knots & Richtung): {wind_calc_duration:.4f}s")
 
-        # Das gesamte Array auf einmal runden via NumPy (Vektorisierung!)
         rounded_wind_pts = np.round(current_wind_pts, 1)
         rounded_wind_dir = np.round(wind_dir_pts, 1)
 
@@ -166,39 +145,20 @@ class WindProcessor:
         self.interpolator.values[:, 0] = current_wind_pts
         grid_data = self.interpolator(self.grid_x, self.grid_y)
         interp_duration = time.perf_counter() - interp_start
-        print(f"   ⏱️ Interpolation: {interp_duration:.4f}s")
+        print(f"    ⏱️ Interpolation: {interp_duration:.4f}s")
 
-        # Farb-Kategorisierung mit np.select für Effizienz
         color_map_start = time.perf_counter()
-
         conditions = [
-            grid_data < 3,
-            grid_data < 5,
-            grid_data < 6,
-            grid_data < 7,
-            grid_data < 8,
-            grid_data < 9,
-            grid_data < 10,
-            grid_data < 12,
-            grid_data < 15,
-            grid_data < 20,
-            grid_data < 25,
-            grid_data >= 25
+            grid_data < 3, grid_data < 5, grid_data < 6, grid_data < 7,
+            grid_data < 8, grid_data < 9, grid_data < 10, grid_data < 12,
+            grid_data < 15, grid_data < 20, grid_data < 25, grid_data >= 25
         ]
 
         color_palette = np.array([
-            [0, 0, 0, 0],
-            [230, 255, 255, 255],
-            [0, 191, 255, 255],
-            [0, 255, 204, 255],
-            [0, 204, 0, 255],
-            [153, 255, 0, 255],
-            [255, 255, 0, 255],
-            [209, 158, 0, 255],
-            [255, 85, 0, 255],
-            [255, 0, 0, 255],
-            [255, 51, 153, 255],
-            [153, 0, 204, 255],
+            [0, 0, 0, 0], [230, 255, 255, 255], [0, 191, 255, 255],
+            [0, 255, 204, 255], [0, 204, 0, 255], [153, 255, 0, 255],
+            [255, 255, 0, 255], [209, 158, 0, 255], [255, 85, 0, 255],
+            [255, 0, 0, 255], [255, 51, 153, 255], [153, 0, 204, 255],
             [0, 0, 255, 255]
         ], dtype=np.uint8)
 
@@ -207,27 +167,37 @@ class WindProcessor:
         img_array = color_palette[selected_color_indices]
 
         color_map_duration = time.perf_counter() - color_map_start
-        print(f"   ⏱️ Color Mapping (np.select): {color_map_duration:.4f}s")
+        print(f"    ⏱️ Color Mapping (np.select): {color_map_duration:.4f}s")
 
         png_save_start = time.perf_counter()
         img = Image.fromarray(img_array, 'RGBA')
         output_image_path = os.path.join(self.output_folder, png_filename)
         img.save(output_image_path, compress_level=6)
         png_save_duration = time.perf_counter() - png_save_start
-        print(f"   ⏱️ PNG Speichern (compress_level=6): {png_save_duration:.4f}s")
+        print(f"    ⏱️ PNG Speichern (compress_level=6): {png_save_duration:.4f}s")
 
         # ---------------------------------------------------------------------
-        # TEIL B: JSON-UPDATE IM RAM PUFFERN (Geschwindigkeit + Richtung)
+        # TEIL B: EFFIZIENTES JSON-UPDATE IM RAM (OHNE REDUNDANZEN)
         # ---------------------------------------------------------------------
         json_agg_start = time.perf_counter()
         for (col, row), meta in self.cluster_mapping.items():
             cluster_key = (col, row)
 
+            # Nur von Festplatte laden, wenn es noch nicht im RAM-Cache liegt
             if cluster_key not in self.cluster_memory:
                 cluster_filename = os.path.join(self.cluster_output_folder, f"cluster_{col}_{row}.json")
                 if os.path.exists(cluster_filename):
                     with open(cluster_filename, "rb") as jf:
-                        self.cluster_memory[cluster_key] = orjson.loads(jf.read())
+                        try:
+                            # Da das Format garantiert stimmt, laden wir direkt die bestehende Struktur
+                            self.cluster_memory[cluster_key] = orjson.loads(jf.read())
+                        except Exception:
+                            # Fallback für unerwartete Ladefehler
+                            self.cluster_memory[cluster_key] = {
+                                "col": col, "row": row,
+                                "lats": meta["lats"], "lons": meta["lons"],
+                                "timeline": {}
+                            }
                 else:
                     self.cluster_memory[cluster_key] = {
                         "col": col, "row": row,
@@ -237,34 +207,31 @@ class WindProcessor:
 
             idx = meta["indices"]
             
-            # NEU: Wir stacken Geschwindigkeit und Richtung spaltenweise zu einem (N, 2) NumPy-Array.
-            # orjson übersetzt diese Matrix im Output vollautomatisch in: [[speed1, dir1], [speed2, dir2], ...]
-            combined_block = np.column_stack((rounded_wind_pts[idx], rounded_wind_dir[idx]))
-            
-            self.cluster_memory[cluster_key]["timeline"][time_key] = combined_block
+            # Speicher- & Parsingeffiziente Zuweisung flacher Arrays
+            self.cluster_memory[cluster_key]["timeline"][time_key] = {
+                "speeds": rounded_wind_pts[idx],
+                "dirs": rounded_wind_dir[idx]
+            }
 
-            # Hard-Rotation auf maximal 19 Stunden direkt im RAM abfangen
+            # Hard-Rotation auf maximal 19 Stunden im RAM abfangen
             if len(self.cluster_memory[cluster_key]["timeline"]) > 19:
                 sorted_keys = sorted(self.cluster_memory[cluster_key]["timeline"].keys())
                 del self.cluster_memory[cluster_key]["timeline"][sorted_keys[0]]
                 
         json_agg_duration = time.perf_counter() - json_agg_start
-        print(f"   ⏱️ JSON RAM Aggregation (Vektorisiert mit Richtung): {json_agg_duration:.4f}s")
+        print(f"    ⏱️ JSON RAM Aggregation (Flache Parallel-Arrays): {json_agg_duration:.4f}s")
 
         total_step_duration = time.perf_counter() - step_start_time
-        print(f"   ⏱️ Total process_step duration: {total_step_duration:.4f}s")
+        print(f"    ⏱️ Total process_step duration: {total_step_duration:.4f}s")
 
         return True
 
     def flush_json_to_disk(self):
-        """
-        Schreibt alle im RAM modifizierten Cluster-Daten in einem Rutsch auf die Festplatte.
-        """
         flush_start_time = time.perf_counter()
         if not self.cluster_memory:
             print("💾 [Processor] Kein Cluster-Speicher zum Schreiben vorhanden.")
             return
-        print(f"\n💾 [Processor] Schreibe {len(self.cluster_memory)} JSON-Cluster gesammelt in den lokalen Output-Ordner...")
+        print(f"\n💾 [Processor] Schreibe {len(self.cluster_memory)} optimierte JSON-Cluster gesammelt in den lokalen Output-Ordner...")
 
         total_serialization_time = 0.0
         total_write_time = 0.0
@@ -273,7 +240,7 @@ class WindProcessor:
             cluster_filename = os.path.join(self.cluster_output_folder, f"cluster_{col}_{row}.json")
 
             serialization_start = time.perf_counter()
-            # OPT_SERIALIZE_NUMPY ist zwingend erforderlich, damit orjson die (N, 2)-Matrizen verarbeiten kann!
+            # orjson liest die flachen NumPy-Arrays blitzschnell aus
             json_bytes = orjson.dumps(cluster_data, option=orjson.OPT_SERIALIZE_NUMPY)
             serialization_duration = time.perf_counter() - serialization_start
             total_serialization_time += serialization_duration
@@ -286,6 +253,5 @@ class WindProcessor:
 
         flush_duration = time.perf_counter() - flush_start_time
         print(f"✅ Alle JSON-Files im lokalen Output-Ordner gespeichert! (Flush time: {flush_duration:.4f}s)")
-        print(f"   ⏱️ Summe JSON Serialisierung (orjson): {total_serialization_time:.4f}s")
-        print(f"   ⏱️ Summe File Writing (file.write): {total_write_time:.4f}s")
-        
+        print(f"    ⏱️ Summe JSON Serialisierung (orjson): {total_serialization_time:.4f}s")
+        print(f"    ⏱️ Summe File Writing (file.write): {total_write_time:.4f}s")
