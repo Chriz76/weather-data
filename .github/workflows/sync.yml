@@ -15,7 +15,6 @@ jobs:
     steps:
       - name: Checkout Code (main)
         uses: actions/checkout@v4
-        # Retrieve the application source code from the main branch
 
       - name: Checkout Existing Data (gh-pages-dev)
         uses: actions/checkout@v4
@@ -23,14 +22,12 @@ jobs:
           ref: gh-pages-dev
           path: output
         continue-on-error: true
-        # Fetch the current state of data assets into the './output' directory.
-        # 'continue-on-error' ensures the workflow proceeds if the 'gh-pages' branch does not exist yet.
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip' # Enable caching for optimized dependency installation
+          cache: 'pip'
 
       - name: Install system dependencies
         run: |
@@ -44,8 +41,6 @@ jobs:
 
       - name: Run pipeline
         run: python pipeline/src/dwd_pipeline.py
-        # The script evaluates existing data in './output' to perform gap-detection
-        # and incrementally updates the dataset along with index.json.
 
       - name: Inject Netlify Headers
         run: |
@@ -53,24 +48,30 @@ jobs:
           echo "  Access-Control-Allow-Origin: *" >> output/_headers
           echo "  Access-Control-Allow-Headers: Content-Type, Authorization" >> output/_headers
 
+      # ==========================================
+      # NEU: Upload des 'output' Ordners zu Netlify
+      # ==========================================
+      - name: Deploy Data to Netlify
+        uses: nwtgck/actions-netlify@v3
+        with:
+          publish-dir: './output' # Lädt exakt den generierten Datenordner hoch
+          production-deploy: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          enable-commit-comment: false # Deaktiviert den Fehler aus dem vorherigen Schritt
+          deploy-message: "DWD Pipeline Update - Run #${{ github.run_number }}"
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: 37db7a10-7183-47f1-bc9d-77d05228438f # Nutze hier die ID deiner Daten-Site auf Netlify
+      # ==========================================
+
       - name: Clean and Force-Push Data Branch (gh-pages-dev)
         run: |
-          # Navigate into the processed output directory
           cd output
-          
-          # Remove the existing git metadata fetched during the checkout step
           rm -rf .git
-          
-          # Initialize a clean, isolated git repository for data deployment
           git init -b gh-pages-dev
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          
-          # Stage and commit all existing and newly generated data assets
           git add -A
           git commit -m "DWD Weather Pipeline - Live State [skip ci]"
-          
-          # Force-push to overwrite the 'gh-pages-dev' branch, keeping the commit history flat 
-          # and serving the assets directly from the repository root for GitHub Pages.
           git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
           git push --force origin gh-pages-dev
