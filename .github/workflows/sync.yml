@@ -42,26 +42,22 @@ jobs:
       - name: Run pipeline
         run: python pipeline/src/dwd_pipeline.py
 
-      - name: Inject Netlify Headers
-        run: |
-          echo "/*" > output/_headers
-          echo "  Access-Control-Allow-Origin: *" >> output/_headers
-          echo "  Access-Control-Allow-Headers: Content-Type, Authorization" >> output/_headers
-
       # ==========================================
-      # NEU: Upload des 'output' Ordners zu Netlify
+      # NEU: Upload des 'output' Ordners zu Cloudflare Pages
       # ==========================================
-      - name: Deploy Data to Netlify
-        uses: nwtgck/actions-netlify@v3
+      - name: Deploy Data to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
         with:
-          publish-dir: './output' # Lädt exakt den generierten Datenordner hoch
-          production-deploy: true
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          enable-commit-comment: false # Deaktiviert den Fehler aus dem vorherigen Schritt
-          deploy-message: "DWD Pipeline Update - Run #${{ github.run_number }}"
-        env:
-          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-          NETLIFY_SITE_ID: 37db7a10-7183-47f1-bc9d-77d05228438f # Nutze hier die ID deiner Daten-Site auf Netlify
+          apiToken: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          accountId: c728452fcd5090f3d7f2bacc5e75fcd2
+          projectName: 'winddata'      # Nutze hier den Namen deines Cloudflare-Projekts
+          directory: './output'        # Lädt exakt den generierten Datenordner hoch
+          branch: 'main'               # Zwingt Cloudflare dazu, dies als Production-Build zu behandeln
+          # Cloudflare erlaubt es, CORS-Header direkt hier zu definieren:
+          headers: |
+            /*
+              Access-Control-Allow-Origin: *
+              Access-Control-Allow-Headers: Content-Type, Authorization
       # ==========================================
 
       - name: Clean and Force-Push Data Branch (gh-pages-dev)
