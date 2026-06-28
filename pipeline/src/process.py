@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image
 import eccodes as ecc
 from scipy.interpolate import LinearNDInterpolator
-import time 
+import time
 
 
 class WindProcessor:
@@ -15,7 +15,7 @@ class WindProcessor:
         self.output_folder = output_folder
         self.cluster_output_folder = os.path.join(output_folder, "grid_cluster")
         os.makedirs(self.cluster_output_folder, exist_ok=True)
-        self.root_folder = root_folder 
+        self.root_folder = root_folder
 
         self.cluster_memory = {}
 
@@ -53,24 +53,24 @@ class WindProcessor:
         y_min_merc = np.degrees(np.log(np.tan(np.pi/4.0 + np.radians(lat_min)/2.0)))
         y_max_merc = np.degrees(np.log(np.tan(np.pi/4.0 + np.radians(lat_max)/2.0)))
 
-        self.width = 2000 
-        self.height = int(self.width * (y_max_merc - y_min_merc) / (lon_max - lon_min)) 
+        self.width = 2000
+        self.height = int(self.width * (y_max_merc - y_min_merc) / (lon_max - lon_min))
 
         grid_x_linear = np.linspace(lon_min, lon_max, self.width)
         grid_y_merc = np.linspace(y_max_merc, y_min_merc, self.height)
-        self.grid_x, self.grid_y = np.meshgrid(grid_x_linear, grid_y_merc) 
+        self.grid_x, self.grid_y = np.meshgrid(grid_x_linear, grid_y_merc)
 
         points_merc = np.vstack((x_pts_merc, y_pts_merc)).T.astype(np.float64)
-        self.total_dwd_points = len(points_merc) 
+        self.total_dwd_points = len(points_merc)
 
-        self.interpolator = LinearNDInterpolator(points_merc, np.zeros(self.total_dwd_points, dtype=np.float64)) 
+        self.interpolator = LinearNDInterpolator(points_merc, np.zeros(self.total_dwd_points, dtype=np.float64))
 
         cluster_cols = np.floor((lon_deg - lon_min) / 1.0).astype(np.int32)
         cluster_rows = np.floor((lat_deg - lat_min) / 1.0).astype(np.int32)
 
         unique_clusters = np.unique(np.column_stack((cluster_cols, cluster_rows)), axis=0)
 
-        self.cluster_mapping = {} 
+        self.cluster_mapping = {}
         for col, row in unique_clusters:
             point_indices = np.where((cluster_cols == col) & (cluster_rows == row))[0]
             self.cluster_mapping[(int(col), int(row))] = {
@@ -89,14 +89,14 @@ class WindProcessor:
         init_duration = time.perf_counter() - init_start_time
         print(f"✅ [Processor] Gitter reaktiviert: {self.width}x{self.height} Pixel | {len(self.cluster_mapping)} Cluster bereit. (Init time: {init_duration:.4f}s)")
 
-    def process_step(self, u_path, v_path, time_key, png_filename):
+    def process_step(self, u_path, v_path, gust_path, time_key, png_filename):
         step_start_time = time.perf_counter()
 
-        if not os.path.exists(u_path) or not os.path.exists(v_path):
+        if not os.path.exists(u_path) or not os.path.exists(v_path) or not os.path.exists(gust_path):
             print(f"⚠️ GRIB2-Dateien für {png_filename} unvollständig. Überspringe Verarbeitung.")
             return False
 
-        print(f"-> Berechne Wind & interpoliere für {png_filename}...")
+        print(f"-> Berechne Wind und interpoliere für {png_filename}...")
 
         grib_load_start = time.perf_counter()
         with open(u_path, 'rb') as f:
@@ -119,6 +119,17 @@ class WindProcessor:
                 pass
             ecc.codes_release(gid_v)
 
+        # Read gust-component values
+        with open(gust_path, 'rb') as f:
+            gid_gust = ecc.codes_grib_new_from_file(f)
+            gust_values = ecc.codes_get_array(gid_gust, 'values')
+            try:
+                gust_missing_value = ecc.codes_get(gid_gust, 'missingValue')
+                gust_values[gust_values == gust_missing_value] = np.nan
+            except ecc.CodesInternalError:
+                pass
+            ecc.codes_release(gid_gust)
+
         grib_load_duration = time.perf_counter() - grib_load_start
         print(f"    ⏱️ GRIB-Ladezeit: {grib_load_duration:.4f}s")
 
@@ -126,17 +137,19 @@ class WindProcessor:
         wind_pts = np.sqrt(u_values**2 + v_values**2) * 1.94384
         min_len = min(self.total_dwd_points, len(wind_pts))
         current_wind_pts = wind_pts[:min_len].astype(np.float64)
-        
+
         u_slice = u_values[:min_len].astype(np.float64)
         v_slice = v_values[:min_len].astype(np.float64)
         raw_dir_deg = 270.0 - np.degrees(np.arctan2(v_slice, u_slice))
         wind_dir_pts = np.mod(raw_dir_deg, 360.0)
+        current_gust_pts = gust_values[:min_len].astype(np.float64) * 1.94384 # Convert gust to knots
 
         wind_calc_duration = time.perf_counter() - wind_calc_start
-        print(f"    ⏱️ Windberechnung (Knots & Richtung): {wind_calc_duration:.4f}s")
+        print(f"    ⏱️ Windberechnung (Knots, Richtung, Böen): {wind_calc_duration:.4f}s")
 
         rounded_wind_pts = np.round(current_wind_pts, 1)
-        rounded_wind_dir = np.round(wind_dir_pts, 1)
+        rounded_wind_dir = np.round(wind_dir_pts, 0)
+        rounded_gust_pts = np.round(current_gust_pts, 0)
 
         # ---------------------------------------------------------------------
         # TEIL A: PNG GENERIERUNG (Basiert weiterhin nur auf Geschwindigkeit)
@@ -206,18 +219,19 @@ class WindProcessor:
                     }
 
             idx = meta["indices"]
-            
+
             # Speicher- & Parsingeffiziente Zuweisung flacher Arrays
             self.cluster_memory[cluster_key]["timeline"][time_key] = {
                 "speeds": rounded_wind_pts[idx],
-                "dirs": rounded_wind_dir[idx]
+                "dirs": rounded_wind_dir[idx],
+                "gusts": rounded_gust_pts[idx]
             }
 
             # Hard-Rotation auf maximal 19 Stunden im RAM abfangen
             if len(self.cluster_memory[cluster_key]["timeline"]) > 19:
                 sorted_keys = sorted(self.cluster_memory[cluster_key]["timeline"].keys())
                 del self.cluster_memory[cluster_key]["timeline"][sorted_keys[0]]
-                
+
         json_agg_duration = time.perf_counter() - json_agg_start
         print(f"    ⏱️ JSON RAM Aggregation (Flache Parallel-Arrays): {json_agg_duration:.4f}s")
 
