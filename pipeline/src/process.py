@@ -10,7 +10,7 @@ import time
 
 
 class WindProcessor:
-    def __init__(self, root_folder, output_folder="./wind_tiles_simulation", timeLineLength):
+    def __init__(self, root_folder,timeLineLength, output_folder="./wind_tiles_simulation"):
         init_start_time = time.perf_counter()
         self.output_folder = output_folder
         self.cluster_output_folder = os.path.join(output_folder, "grid_cluster")
