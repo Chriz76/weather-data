@@ -15,6 +15,7 @@ from process import WindProcessor
 # OUTPUT_DIR will be where the gh-pages branch is checked out, usually './output'
 OUTPUT_DIR = "./output"
 TEMP_GRIB_DIR = "./grib_temp"
+FORECASTLENGTH = 24
 
 # Path to the warmed-up index.
 # This part is removed as WindProcessor now handles geometry loading internally.
@@ -64,7 +65,7 @@ def run_ruc_pipeline():
     print(f"========================================================")
 
     # Initialize WindProcessor, passing the root_folder where clat.grib2 and clon.grib2 are located
-    processor = WindProcessor(root_folder=ROOT_FOLDER, output_folder=OUTPUT_DIR)
+    processor = WindProcessor(root_folder=ROOT_FOLDER, output_folder=OUTPUT_DIR, FORECASTLENGTH + 5)
     # The cluster_output_folder for the processor needs to be relative to OUTPUT_DIR
     processor.cluster_output_folder = os.path.join(OUTPUT_DIR, "grid_cluster")
     os.makedirs(processor.cluster_output_folder, exist_ok=True) # Ensure it exists
@@ -79,7 +80,7 @@ def run_ruc_pipeline():
         dwd_run_folder = target_time.strftime("%Y-%m-%dT%H:00")
 
         # Path for the final +24h PNG file of this run
-        final_valid_time = target_time + timedelta(hours=24)
+        final_valid_time = target_time + timedelta(hours=FORECASTLENGTH)
         final_output_filename = f"{final_valid_time.strftime('%Y%m%d_%H')}Z.png"
         final_output_path = os.path.join(OUTPUT_DIR, final_output_filename)
 
@@ -94,11 +95,11 @@ def run_ruc_pipeline():
             else:
                 print(f"📡 [Run {dwd_run_folder}Z] Missing locally. Checking DWD Server...")
                 should_process = True
-                missing_hours = list(range(25))  # All 25 steps from PT000H to PT024H
+                missing_hours = list(range(FORECASTLENGTH +1))  # All X steps from PT000H to PT024H
 
         if newest_run_processed:
             # Mode B: Scan history for gaps
-            for f_hour in range(25):
+            for f_hour in range(FORECASTLENGTH + 1):
                 valid_time = target_time + timedelta(hours=f_hour)
                 output_filename = f"{valid_time.strftime('%Y%m%d_%H')}Z.png"
                 if not os.path.exists(os.path.join(OUTPUT_DIR, output_filename)):
@@ -110,7 +111,7 @@ def run_ruc_pipeline():
 
         # If something needs to be processed, we query the server via HEAD
         if should_process and missing_hours:
-            test_url = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/V_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT024H00M.grib2"
+            test_url = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/V_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT{FORECASTLENGTH:03d}H00M.grib2"
 
             head_success = False
             response_code = None
