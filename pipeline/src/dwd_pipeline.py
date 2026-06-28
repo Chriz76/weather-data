@@ -78,8 +78,8 @@ def run_ruc_pipeline():
         target_time = target_time.replace(minute=0, second=0, microsecond=0)
         dwd_run_folder = target_time.strftime("%Y-%m-%dT%H:00")
 
-        # Path for the final +14h PNG file of this run
-        final_valid_time = target_time + timedelta(hours=14)
+        # Path for the final +24h PNG file of this run
+        final_valid_time = target_time + timedelta(hours=24)
         final_output_filename = f"{final_valid_time.strftime('%Y%m%d_%H')}Z.png"
         final_output_path = os.path.join(OUTPUT_DIR, final_output_filename)
 
@@ -94,11 +94,11 @@ def run_ruc_pipeline():
             else:
                 print(f"📡 [Run {dwd_run_folder}Z] Missing locally. Checking DWD Server...")
                 should_process = True
-                missing_hours = list(range(15))  # All 15 steps from PT000H to PT014H
+                missing_hours = list(range(25))  # All 25 steps from PT000H to PT024H
 
         if newest_run_processed:
             # Mode B: Scan history for gaps
-            for f_hour in range(15):
+            for f_hour in range(25):
                 valid_time = target_time + timedelta(hours=f_hour)
                 output_filename = f"{valid_time.strftime('%Y%m%d_%H')}Z.png"
                 if not os.path.exists(os.path.join(OUTPUT_DIR, output_filename)):
@@ -110,7 +110,7 @@ def run_ruc_pipeline():
 
         # If something needs to be processed, we query the server via HEAD
         if should_process and missing_hours:
-            test_url = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/V_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT014H00M.grib2"
+            test_url = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/V_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT024H00M.grib2"
 
             head_success = False
             response_code = None
@@ -202,7 +202,8 @@ def run_ruc_pipeline():
         if detected_current_hour and detected_current_hour in sorted_timestamps:
             current_hour = detected_current_hour
         else:
-            if len(sorted_timestamps) >= 14:
+            # Fallback angepasst an 24 Stunden
+            if len(sorted_timestamps) >= 24:
                 current_hour = sorted_timestamps[len(sorted_timestamps) // 2]
             else:
                 current_hour = sorted_timestamps[-1]
