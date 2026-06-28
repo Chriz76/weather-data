@@ -204,7 +204,7 @@ def run_ruc_pipeline():
             current_hour = detected_current_hour
         else:
             # Fallback angepasst an x Stunden
-            if len(sorted_timestamps) >= FORECASTLENGTH:
+            if len(sorted_timestamps) >= FORECASTLENGTH+5:
                 current_hour = sorted_timestamps[len(sorted_timestamps) // 2]
             else:
                 current_hour = sorted_timestamps[-1]
