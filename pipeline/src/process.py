@@ -9,9 +9,10 @@ from scipy.interpolate import LinearNDInterpolator
 
 
 class WindProcessor:
-    def __init__(self, root_folder=".", output_folder="./wind_tiles_simulation"):
+    def __init__(self, root_folder=".", output_folder="./wind_tiles_simulation", timeLineLength):
         self.root_folder = root_folder
         self.output_folder = output_folder
+        self.timeLineLength = timeLineLength
         self.cluster_output_folder = os.path.join(output_folder, "grid_cluster")
         os.makedirs(self.cluster_output_folder, exist_ok=True)
         
@@ -171,8 +172,8 @@ class WindProcessor:
             # Im RAM erweitern
             self.cluster_memory[cluster_key]["timeline"][time_key] = cluster_winds
 
-            # Hard-Rotation auf 19 Stunden direkt im RAM
-            if len(self.cluster_memory[cluster_key]["timeline"]) > 19:
+            # Hard-Rotation auf X Stunden direkt im RAM
+            if len(self.cluster_memory[cluster_key]["timeline"]) > self.timeLineLength:
                 sorted_keys = sorted(self.cluster_memory[cluster_key]["timeline"].keys())
                 del self.cluster_memory[cluster_key]["timeline"][sorted_keys[0]]
                 
