@@ -65,7 +65,7 @@ def run_ruc_pipeline():
     print(f"========================================================")
 
     # Initialize WindProcessor, passing the root_folder where clat.grib2 and clon.grib2 are located
-    processor = WindProcessor(root_folder=ROOT_FOLDER, output_folder=OUTPUT_DIR, FORECASTLENGTH + 5)
+    processor = WindProcessor(root_folder=ROOT_FOLDER, output_folder=OUTPUT_DIR, timeLineLength=FORECASTLENGTH + 5)
     # The cluster_output_folder for the processor needs to be relative to OUTPUT_DIR
     processor.cluster_output_folder = os.path.join(OUTPUT_DIR, "grid_cluster")
     os.makedirs(processor.cluster_output_folder, exist_ok=True) # Ensure it exists
