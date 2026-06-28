@@ -160,16 +160,19 @@ def run_ruc_pipeline():
 
                     url_u = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/U_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT{f_hour:03d}H00M.grib2"
                     url_v = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/V_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT{f_hour:03d}H00M.grib2"
+                    url_vmax = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/VMAX_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT{f_hour+1:03d}H00M.grib2"
 
                     u_path = os.path.join(TEMP_GRIB_DIR, f"u_{time_key}.grib2")
                     v_path = os.path.join(TEMP_GRIB_DIR, f"v_{time_key}.grib2")
+                    vmax_path = os.path.join(TEMP_GRIB_DIR, f"vmax_{time_key}.grib2")
 
                     print(f"   -> Downloading step +{f_hour}h...")
-                    if download_file(url_u, u_path) and download_file(url_v, v_path):
-                        success = processor.process_step(u_path, v_path, time_key, png_filename)
+                    if download_file(url_u, u_path) and download_file(url_v, v_path) and download_file(url_vmax, vmax_path):
+                        success = processor.process_step(u_path, v_path, vmax_path, time_key, png_filename)
 
                         if os.path.exists(u_path): os.remove(u_path)
                         if os.path.exists(v_path): os.remove(v_path)
+                        if os.path.exists(vmax_path): os.remove(vmax_path)
 
                         if success:
                             print(f"      ✅ Step +{f_hour}h processed successfully.")
