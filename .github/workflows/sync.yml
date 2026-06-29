@@ -47,6 +47,8 @@ jobs:
           pip install -r pipeline/requirements.txt
 
       - name: Run pipeline
+        env:
+          DWD_TARGET_RUN: ${{ github.event.inputs.dwd_run }}
         run: python pipeline/src/dwd_pipeline.py
 
       # ==========================================
