@@ -2,8 +2,15 @@ name: Run DWD Pipeline
 
 on:
   workflow_dispatch:
-  #schedule:
-  #  - cron: '45 * * * *'  # Hourly execution
+    inputs:
+      dwd_run:
+        description: 'Der vom Worker erkannte DWD-Lauf'
+        required: true
+        type: string  # Definiert den Typ explizit als String
+
+concurrency:
+  group: dwd-pipeline-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
