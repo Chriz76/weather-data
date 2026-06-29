@@ -5,38 +5,25 @@ import shutil
 import json
 import time
 from datetime import datetime, timezone, timedelta
-# import pickle # Removed for loading index_payload
 
-# Add the current script's directory to sys.path to find process.py
+# Erlaubt den Import von process.py im selben Ordner
 sys.path.append(os.path.dirname(__file__))
 from process import WindProcessor
 
-# --- CONFIGURATION ---
-# OUTPUT_DIR will be where the gh-pages branch is checked out, usually './output'
+# --- KONFIGURATION ---
 OUTPUT_DIR = "./output"
 TEMP_GRIB_DIR = "./grib_temp"
 FORECASTLENGTH = 24
 
-# Path to the warmed-up index.
-# This part is removed as WindProcessor now handles geometry loading internally.
-# INDEX_DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "warmed_static_weather_indices_dense.pkl")
-
-# ROOT_FOLDER now points to where clat.grib2 and clon.grib2 are expected
+# ROOT_FOLDER zeigt dorthin, wo clat.grib2 und clon.grib2 liegen
 ROOT_FOLDER = os.path.dirname(__file__)
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(TEMP_GRIB_DIR, exist_ok=True)
 
-# Load the warmed-up static weather indices
-# This block is removed as WindProcessor now handles this internally.
-# print(f"--- Loading warmed-up static weather indices from {INDEX_DATA_PATH} ---")
-# with open(INDEX_DATA_PATH, "rb") as f:
-#     index_payload = pickle.load(f)
-# print("✅ Warmed-up static weather indices loaded.")
-
 
 def download_file(url, local_path):
-    """Helper function for real downloads with stream buffering and 3 retries"""
+    """Hilfsfunktion für echte Downloads mit Stream-Pufferung und 3 Retries"""
     max_retries = 3
     for attempt in range(1, max_retries + 1):
         try:
@@ -47,146 +34,75 @@ def download_file(url, local_path):
                         f.write(chunk)
                 return True
             else:
-                print(f"   ⚠️ Download attempt {attempt} failed (Status: {response.status_code})")
+                print(f"   ⚠️ Download-Versuch {attempt} fehlgeschlagen (Status: {response.status_code})")
         except Exception as e:
-            print(f"   ⚠️ Download error on attempt {attempt}: {e}")
+            print(f"   ⚠️ Download-Fehler bei Versuch {attempt}: {e}")
 
         if attempt < max_retries:
-            wait_time = attempt * 2  # Increasing interval: 2s, 4s...
-            print(f"   ⏳ Waiting {wait_time} seconds before next attempt...")
+            wait_time = attempt * 2
+            print(f"   ⏳ Warte {wait_time} Sekunden vor nächstem Versuch...")
             time.sleep(wait_time)
 
     return False
 
+
 def run_ruc_pipeline():
-    utc_now = datetime.now(timezone.utc)
+    # --- Ziel-Lauf direkt aus der Cloudflare-Übergabe auslesen ---
+    dwd_run_env = os.environ.get("DWD_TARGET_RUN")
+    
+    if not dwd_run_env:
+        print("❌ FEHLER: Umgebungsvariable 'DWD_TARGET_RUN' fehlt! Wurde die Action via Cloudflare gestartet?")
+        sys.exit(1)
+
+    # dwd_run_env sieht so aus: "2026-06-29T18:00"
+    target_time = datetime.strptime(dwd_run_env, "%Y-%m-%dT%H:%M").replace(tzinfo=timezone.utc)
+    dwd_run_folder = target_time.strftime("%Y-%m-%dT%H:00")
+
     print(f"\n========================================================")
-    print(f"START PIPELINE - Current UTC Time: {utc_now.strftime('%Y-%m-%d %H:%M:%S')}Z")
+    print(f"START PIPELINE - Verarbeite DWD-Run: {dwd_run_folder}Z")
     print(f"========================================================")
 
-    # Initialize WindProcessor, passing the root_folder where clat.grib2 and clon.grib2 are located
+    # Initialisiere den WindProcessor anhand deines korrekten Setups
     processor = WindProcessor(root_folder=ROOT_FOLDER, output_folder=OUTPUT_DIR, timeLineLength=FORECASTLENGTH + 5)
-    # The cluster_output_folder for the processor needs to be relative to OUTPUT_DIR
     processor.cluster_output_folder = os.path.join(OUTPUT_DIR, "grid_cluster")
-    os.makedirs(processor.cluster_output_folder, exist_ok=True) # Ensure it exists
+    os.makedirs(processor.cluster_output_folder, exist_ok=True)
 
-    newest_run_processed = False
-    detected_current_hour = None
+    detected_current_hour = target_time.strftime('%Y%m%d_%H')
 
-    # Range reduced from 14 to 5 hours for less lookback
-    for hour_offset in range(5):
-        target_time = utc_now - timedelta(hours=hour_offset)
-        target_time = target_time.replace(minute=0, second=0, microsecond=0)
-        dwd_run_folder = target_time.strftime("%Y-%m-%dT%H:00")
+    # Da Cloudflare steuert, laden wir stur alle Schritte (0 bis 24) für diesen Lauf
+    missing_hours = list(range(FORECASTLENGTH + 1))
 
-        # Path for the final +24h PNG file of this run
-        final_valid_time = target_time + timedelta(hours=FORECASTLENGTH)
-        final_output_filename = f"{final_valid_time.strftime('%Y%m%d_%H')}Z.png"
-        final_output_path = os.path.join(OUTPUT_DIR, final_output_filename)
+    print(f"👑 Server bereit! Starte Verarbeitung von {len(missing_hours)} Schritten...")
 
-        should_process = False
-        missing_hours = []
+    for f_hour in missing_hours:
+        valid_time = target_time + timedelta(hours=f_hour)
+        time_key = valid_time.strftime('%Y%m%d_%H')
+        png_filename = f"{time_key}Z.png"
 
-        if not newest_run_processed:
-            if os.path.exists(final_output_path):
-                print(f"💾 [Run {dwd_run_folder}Z] Already fully present. (Switching to history mode)")
-                newest_run_processed = True
-                detected_current_hour = target_time.strftime('%Y%m%d_%H')
-            else:
-                print(f"📡 [Run {dwd_run_folder}Z] Missing locally. Checking DWD Server...")
-                should_process = True
-                missing_hours = list(range(FORECASTLENGTH +1))  # All X steps from PT000H to PT024H
+        # URLs für U, V und VMAX
+        url_u = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/U_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT{f_hour:03d}H00M.grib2"
+        url_v = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/V_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT{f_hour:03d}H00M.grib2"
+        url_vmax = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/VMAX_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT{f_hour+1:03d}H00M.grib2"
 
-        if newest_run_processed:
-            # Mode B: Scan history for gaps
-            for f_hour in range(FORECASTLENGTH + 1):
-                valid_time = target_time + timedelta(hours=f_hour)
-                output_filename = f"{valid_time.strftime('%Y%m%d_%H')}Z.png"
-                if not os.path.exists(os.path.join(OUTPUT_DIR, output_filename)):
-                    missing_hours.append(f_hour)
+        u_path = os.path.join(TEMP_GRIB_DIR, f"u_{time_key}.grib2")
+        v_path = os.path.join(TEMP_GRIB_DIR, f"v_{time_key}.grib2")
+        vmax_path = os.path.join(TEMP_GRIB_DIR, f"vmax_{time_key}.grib2")
 
-            if missing_hours:
-                print(f"📚 [Run {dwd_run_folder}Z] {len(missing_hours)} gap(s) detected. Checking Server...")
-                should_process = True
+        print(f"   -> Downloade Schritt +{f_hour}h...")
+        if download_file(url_u, u_path) and download_file(url_v, v_path) and download_file(url_vmax, vmax_path):
+            success = processor.process_step(u_path, v_path, vmax_path, time_key, png_filename)
 
-        # If something needs to be processed, we query the server via HEAD
-        if should_process and missing_hours:
-            test_url = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/V_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT{FORECASTLENGTH:03d}H00M.grib2"
+            if os.path.exists(u_path): os.remove(u_path)
+            if os.path.exists(v_path): os.remove(v_path)
+            if os.path.exists(vmax_path): os.remove(vmax_path)
 
-            head_success = False
-            response_code = None
-
-            # --- NEW: INTELLIGENT WAITING LOOP FOR THE LATEST RUN (hour_offset == 0) ---
-            max_wait_attempts = 3 if hour_offset == 0 else 1
-            wait_delay_seconds = 300  # 5 minutes splitting interval
-
-            for wait_attempt in range(1, max_wait_attempts + 1):
-                if wait_attempt > 1:
-                    print(f"   ⏰ [Retry loop] Trying again in {wait_delay_seconds // 60} minutes... (Attempt {wait_attempt}/{max_wait_attempts})")
-                    time.sleep(wait_delay_seconds)
-
-                # HEAD check within the current attempt (with quick 3 internal retries for network hiccups)
-                max_head_retries = 3
-                for attempt in range(1, max_head_retries + 1):
-                    try:
-                        response = requests.head(test_url, timeout=8) # Slightly increased timeout
-                        response_code = response.status_code
-                        if response_code == 200:
-                            head_success = True
-                            break
-                        else:
-                            print(f"   ⚠️ HEAD-Check {attempt} returned Status: {response_code}")
-                    except Exception as e:
-                        print(f"   ⚠️ HEAD-Connection error on Check {attempt}: {e}")
-
-                    if attempt < max_head_retries:
-                        time.sleep(3) # Short break for direct connection errors
-
-                # If the server is ready (200 OK), break the 5-minute waiting loop immediately!
-                if head_success:
-                    break
-                elif hour_offset == 0 and wait_attempt < max_wait_attempts:
-                    print(f"   ❌ [Run {dwd_run_folder}Z] Not yet available on DWD server (Status: {response_code or 'Timeout'}).")
-
-            if head_success:
-                print(f"👑 [Run {dwd_run_folder}Z] Server ready! Starting processing of {len(missing_hours)} steps...")
-
-                if not newest_run_processed:
-                    detected_current_hour = target_time.strftime('%Y%m%d_%H')
-
-                for f_hour in missing_hours:
-                    valid_time = target_time + timedelta(hours=f_hour)
-                    time_key = valid_time.strftime('%Y%m%d_%H')
-                    png_filename = f"{time_key}Z.png"
-
-                    url_u = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/U_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT{f_hour:03d}H00M.grib2"
-                    url_v = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/V_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT{f_hour:03d}H00M.grib2"
-                    url_vmax = f"https://opendata.dwd.de/weather/nwp/v1/m/icon-d2-ruc/p/VMAX_10M/r/{target_time.strftime('%Y-%m-%dT%H%%3A00')}/s/PT{f_hour+1:03d}H00M.grib2"
-
-                    u_path = os.path.join(TEMP_GRIB_DIR, f"u_{time_key}.grib2")
-                    v_path = os.path.join(TEMP_GRIB_DIR, f"v_{time_key}.grib2")
-                    vmax_path = os.path.join(TEMP_GRIB_DIR, f"vmax_{time_key}.grib2")
-
-                    print(f"   -> Downloading step +{f_hour}h...")
-                    if download_file(url_u, u_path) and download_file(url_v, v_path) and download_file(url_vmax, vmax_path):
-                        success = processor.process_step(u_path, v_path, vmax_path, time_key, png_filename)
-
-                        if os.path.exists(u_path): os.remove(u_path)
-                        if os.path.exists(v_path): os.remove(v_path)
-                        if os.path.exists(vmax_path): os.remove(vmax_path)
-
-                        if success:
-                            print(f"      ✅ Step +{f_hour}h processed successfully.")
-                    else:
-                        print(f"   ❌ Error downloading step +{f_hour}h.")
-
-                if not newest_run_processed:
-                    newest_run_processed = True
-            else:
-                print(f"❌ [Run {dwd_run_folder}Z] Data finally not available (Last Status: {response_code}). Switching permanently to history mode.")
+            if success:
+                print(f"      ✅ Schritt +{f_hour}h erfolgreich prozessiert.")
+        else:
+            print(f"   ❌ Fehler beim Download von Schritt +{f_hour}h.")
 
     # =========================================================================
-    # FINAL SAVING & DYNAMIC CREATION OF INDEX.JSON
+    # FINALES SPEICHERN & DYNAMISCHE ERSTELLUNG DER INDEX.JSON
     # =========================================================================
     processor.flush_json_to_disk()
 
@@ -203,8 +119,7 @@ def run_ruc_pipeline():
         if detected_current_hour and detected_current_hour in sorted_timestamps:
             current_hour = detected_current_hour
         else:
-            # Fallback angepasst an x Stunden
-            if len(sorted_timestamps) >= FORECASTLENGTH+5:
+            if len(sorted_timestamps) >= FORECASTLENGTH + 5:
                 current_hour = sorted_timestamps[len(sorted_timestamps) // 2]
             else:
                 current_hour = sorted_timestamps[-1]
@@ -215,21 +130,22 @@ def run_ruc_pipeline():
             "current_hour": current_hour
         }
 
-        print(f"\n📝 [Main Program] Generating {index_path}...")
-        print(f"   -> Available steps in frontend: {len(sorted_timestamps)}")
-        print(f"   -> Exactly detected standard focus (current_hour): {current_hour}")
+        print(f"\n📝 [Main Program] Generiere {index_path}...")
+        print(f"   -> Verfügbare Schritte im Frontend: {len(sorted_timestamps)}")
+        print(f"   -> Exakt detektierter Standard-Fokus (current_hour): {current_hour}")
 
         with open(index_path, "w") as f:
             json.dump(index_data, f, indent=2)
-        print("✅ index.json successfully updated!")
+        print("✅ index.json erfolgreich aktualisiert!")
     else:
-        print("⚠️ Warning: No data timestamps found for index.json.")
+        print("⚠️ Warnung: Keine Daten-Timestamps für index.json gefunden.")
 
     if os.path.exists(TEMP_GRIB_DIR):
         shutil.rmtree(TEMP_GRIB_DIR)
-        print("🧹 Temporary download folder has been completely cleaned up!")
+        print("🧹 Temporärer Download-Ordner wurde vollständig bereinigt!")
 
-    print("\n🎉 PIPELINE SUCCESSFULLY COMPLETED!")
+    print("\n🎉 PIPELINE ERFOLGREICH BEENDET!")
+
 
 if __name__ == "__main__":
     run_ruc_pipeline()
