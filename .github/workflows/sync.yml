@@ -20,13 +20,13 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout Code (main)
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Checkout Existing Data (gh-pages-dev)
+      - name: Checkout Existing Data (gh-pages-dev-webp)
         uses: actions/checkout@v4
         with:
-          ref: gh-pages-dev
+          ref: gh-pages-dev-webp
           path: output
         continue-on-error: true
 
@@ -61,7 +61,7 @@ jobs:
           accountId: c728452fcd5090f3d7f2bacc5e75fcd2
           projectName: 'winddata'      # Nutze hier den Namen deines Cloudflare-Projekts
           directory: './output'        # Lädt exakt den generierten Datenordner hoch
-          branch: 'main'               # Zwingt Cloudflare dazu, dies als Production-Build zu behandeln
+          branch: ${{ github.ref_name }}
           # Cloudflare erlaubt es, CORS-Header direkt hier zu definieren:
           headers: |
             /*
@@ -69,14 +69,14 @@ jobs:
               Access-Control-Allow-Headers: Content-Type, Authorization
       # ==========================================
 
-      - name: Clean and Force-Push Data Branch (gh-pages-dev)
+      - name: Clean and Force-Push Data Branch (gh-pages-dev-webp)
         run: |
           cd output
           rm -rf .git
-          git init -b gh-pages-dev
+          git init -b gh-pages-dev-webp
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add -A
           git commit -m "DWD Weather Pipeline - Live State [skip ci]"
           git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
-          git push --force origin gh-pages-dev
+          git push --force origin gh-pages-dev-webp

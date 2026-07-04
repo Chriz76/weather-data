@@ -10,7 +10,7 @@ import time
 
 
 class WindProcessor:
-    def __init__(self, root_folder,timeLineLength, output_folder="./wind_tiles_simulation"):
+    def __init__(self, root_folder, timeLineLength, output_folder="./wind_tiles_simulation"):
         init_start_time = time.perf_counter()
         self.output_folder = output_folder
         self.cluster_output_folder = os.path.join(output_folder, "grid_cluster")
@@ -90,14 +90,14 @@ class WindProcessor:
         init_duration = time.perf_counter() - init_start_time
         print(f"✅ [Processor] Gitter reaktiviert: {self.width}x{self.height} Pixel | {len(self.cluster_mapping)} Cluster bereit. (Init time: {init_duration:.4f}s)")
 
-    def process_step(self, u_path, v_path, gust_path, time_key, png_filename):
+    def process_step(self, u_path, v_path, gust_path, time_key, filename):
         step_start_time = time.perf_counter()
 
         if not os.path.exists(u_path) or not os.path.exists(v_path) or not os.path.exists(gust_path):
-            print(f"⚠️ GRIB2-Dateien für {png_filename} unvollständig. Überspringe Verarbeitung.")
+            print(f"⚠️ GRIB2-Dateien für {filename} unvollständig. Überspringe Verarbeitung.")
             return False
 
-        print(f"-> Berechne Wind und interpoliere für {png_filename}...")
+        print(f"-> Berechne Wind und interpoliere für {filename}...")
 
         grib_load_start = time.perf_counter()
         with open(u_path, 'rb') as f:
@@ -153,7 +153,7 @@ class WindProcessor:
         rounded_gust_pts = np.round(current_gust_pts, 0)
 
         # ---------------------------------------------------------------------
-        # TEIL A: PNG GENERIERUNG (Basiert weiterhin nur auf Geschwindigkeit)
+        # TEIL A: WebP GENERIERUNG (Hocheffizienter Lossless-Modus)
         # ---------------------------------------------------------------------
         interp_start = time.perf_counter()
         self.interpolator.values[:, 0] = current_wind_pts
@@ -183,12 +183,20 @@ class WindProcessor:
         color_map_duration = time.perf_counter() - color_map_start
         print(f"    ⏱️ Color Mapping (np.select): {color_map_duration:.4f}s")
 
-        png_save_start = time.perf_counter()
+        webp_save_start = time.perf_counter()
         img = Image.fromarray(img_array, 'RGBA')
-        output_image_path = os.path.join(self.output_folder, png_filename)
-        img.save(output_image_path, compress_level=6)
-        png_save_duration = time.perf_counter() - png_save_start
-        print(f"    ⏱️ PNG Speichern (compress_level=6): {png_save_duration:.4f}s")
+        
+        # Falls der alte Parameter noch .png enthielt, tauschen wir die Endung hier aus
+        webp_filename = filename.replace(".png", ".webp") if filename.endswith(".png") else filename
+        output_image_path = os.path.join(self.output_folder, webp_filename)
+        
+        # 🔥 HIER PASSIERT DIE MAGIE: 
+        # format="WEBP" erzwingt das Format.
+        # lossless=True kollabiert die transparenten Zonen und indiziert die harten Farbblöcke perfekt.
+        img.save(output_image_path, format="WEBP", lossless=True, method=4)
+        
+        webp_save_duration = time.perf_counter() - webp_save_start
+        print(f"    ⏱️ WebP Speichern (Lossless, method=4): {webp_save_duration:.4f}s")
 
         # ---------------------------------------------------------------------
         # TEIL B: EFFIZIENTES JSON-UPDATE IM RAM (OHNE REDUNDANZEN)
@@ -197,16 +205,13 @@ class WindProcessor:
         for (col, row), meta in self.cluster_mapping.items():
             cluster_key = (col, row)
 
-            # Nur von Festplatte laden, wenn es noch nicht im RAM-Cache liegt
             if cluster_key not in self.cluster_memory:
                 cluster_filename = os.path.join(self.cluster_output_folder, f"cluster_{col}_{row}.json")
                 if os.path.exists(cluster_filename):
                     with open(cluster_filename, "rb") as jf:
                         try:
-                            # Da das Format garantiert stimmt, laden wir direkt die bestehende Struktur
                             self.cluster_memory[cluster_key] = orjson.loads(jf.read())
                         except Exception:
-                            # Fallback für unerwartete Ladefehler
                             self.cluster_memory[cluster_key] = {
                                 "col": col, "row": row,
                                 "lats": meta["lats"], "lons": meta["lons"],
@@ -221,14 +226,12 @@ class WindProcessor:
 
             idx = meta["indices"]
 
-            # Speicher- & Parsingeffiziente Zuweisung flacher Arrays
             self.cluster_memory[cluster_key]["timeline"][time_key] = {
                 "speeds": rounded_wind_pts[idx],
                 "dirs": rounded_wind_dir[idx],
                 "gusts": rounded_gust_pts[idx]
             }
 
-            # Hard-Rotation auf maximal x Stunden im RAM abfangen
             if len(self.cluster_memory[cluster_key]["timeline"]) > self.timeLineLength:
                 sorted_keys = sorted(self.cluster_memory[cluster_key]["timeline"].keys())
                 del self.cluster_memory[cluster_key]["timeline"][sorted_keys[0]]
@@ -255,7 +258,6 @@ class WindProcessor:
             cluster_filename = os.path.join(self.cluster_output_folder, f"cluster_{col}_{row}.json")
 
             serialization_start = time.perf_counter()
-            # orjson liest die flachen NumPy-Arrays blitzschnell aus
             json_bytes = orjson.dumps(cluster_data, option=orjson.OPT_SERIALIZE_NUMPY)
             serialization_duration = time.perf_counter() - serialization_start
             total_serialization_time += serialization_duration
