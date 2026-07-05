@@ -120,7 +120,6 @@ class WindProcessor:
                 pass
             ecc.codes_release(gid_v)
 
-        # Read gust-component values
         with open(gust_path, 'rb') as f:
             gid_gust = ecc.codes_grib_new_from_file(f)
             gust_values = ecc.codes_get_array(gid_gust, 'values')
@@ -143,7 +142,7 @@ class WindProcessor:
         v_slice = v_values[:min_len].astype(np.float64)
         raw_dir_deg = 270.0 - np.degrees(np.arctan2(v_slice, u_slice))
         wind_dir_pts = np.mod(raw_dir_deg, 360.0)
-        current_gust_pts = gust_values[:min_len].astype(np.float64) * 1.94384 # Convert gust to knots
+        current_gust_pts = gust_values[:min_len].astype(np.float64) * 1.94384
 
         wind_calc_duration = time.perf_counter() - wind_calc_start
         print(f"    ⏱️ Windberechnung (Knots, Richtung, Böen): {wind_calc_duration:.4f}s")
@@ -153,7 +152,7 @@ class WindProcessor:
         rounded_gust_pts = np.round(current_gust_pts, 0)
 
         # ---------------------------------------------------------------------
-        # TEIL A: WebP GENERIERUNG (Hocheffizienter Lossless-Modus)
+        # TEIL A: BILD GENERIERUNG (PNG & WebP parallel erzeugen)
         # ---------------------------------------------------------------------
         interp_start = time.perf_counter()
         self.interpolator.values[:, 0] = current_wind_pts
@@ -183,18 +182,21 @@ class WindProcessor:
         color_map_duration = time.perf_counter() - color_map_start
         print(f"    ⏱️ Color Mapping (np.select): {color_map_duration:.4f}s")
 
-        webp_save_start = time.perf_counter()
         img = Image.fromarray(img_array, 'RGBA')
-        
-        # Falls der alte Parameter noch .png enthielt, tauschen wir die Endung hier aus
-        webp_filename = filename.replace(".png", ".webp") if filename.endswith(".png") else filename
-        output_image_path = os.path.join(self.output_folder, webp_filename)
-        
-        # 🔥 HIER PASSIERT DIE MAGIE: 
-        # format="WEBP" erzwingt das Format.
-        # lossless=True kollabiert die transparenten Zonen und indiziert die harten Farbblöcke perfekt.
-        img.save(output_image_path, format="WEBP", lossless=True, method=4)
-        
+
+        # 1. PNG Speichern
+        png_save_start = time.perf_counter()
+        png_filename = filename if filename.endswith(".png") else f"{filename}.png"
+        output_png_path = os.path.join(self.output_folder, png_filename)
+        img.save(output_png_path, compress_level=6)
+        png_save_duration = time.perf_counter() - png_save_start
+        print(f"    ⏱️ PNG Speichern (compress_level=6): {png_save_duration:.4f}s")
+
+        # 2. WebP Speichern (Lossless, method=4)
+        webp_save_start = time.perf_counter()
+        webp_filename = filename.replace(".png", ".webp") if filename.endswith(".png") else f"{filename}.webp"
+        output_webp_path = os.path.join(self.output_folder, webp_filename)
+        img.save(output_webp_path, format="WEBP", lossless=True, method=4)
         webp_save_duration = time.perf_counter() - webp_save_start
         print(f"    ⏱️ WebP Speichern (Lossless, method=4): {webp_save_duration:.4f}s")
 
