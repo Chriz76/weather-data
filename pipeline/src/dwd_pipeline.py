@@ -14,6 +14,7 @@ from process import WindProcessor
 OUTPUT_DIR = "./output"
 TEMP_GRIB_DIR = "./grib_temp"
 FORECASTLENGTH = 24
+API_VERSION = "1.1.0"
 
 # ROOT_FOLDER zeigt dorthin, wo clat.grib2 und clon.grib2 liegen
 ROOT_FOLDER = os.path.dirname(__file__)
@@ -127,7 +128,8 @@ def run_ruc_pipeline():
         index_data = {
             "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "available_timestamps": sorted_timestamps,
-            "current_hour": current_hour
+            "current_hour": current_hour,
+            "api_version": API_VERSION
         }
 
         print(f"\n📝 [Main Program] Generiere {index_path}...")
