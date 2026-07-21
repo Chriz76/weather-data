@@ -152,7 +152,7 @@ class WindProcessor:
         rounded_gust_pts = np.round(current_gust_pts, 0)
 
         # ---------------------------------------------------------------------
-        # TEIL A: BILD GENERIERUNG (PNG & WebP parallel erzeugen)
+        # TEIL A: BILD GENERIERUNG
         # ---------------------------------------------------------------------
         interp_start = time.perf_counter()
         self.interpolator.values[:, 0] = current_wind_pts
@@ -185,12 +185,12 @@ class WindProcessor:
         img = Image.fromarray(img_array, 'RGBA')
 
         # 1. PNG Speichern
-        png_save_start = time.perf_counter()
+        # png_save_start = time.perf_counter()
         png_filename = filename if filename.endswith(".png") else f"{filename}.png"
-        output_png_path = os.path.join(self.output_folder, png_filename)
-        img.save(output_png_path, compress_level=6)
-        png_save_duration = time.perf_counter() - png_save_start
-        print(f"    ⏱️ PNG Speichern (compress_level=6): {png_save_duration:.4f}s")
+        # output_png_path = os.path.join(self.output_folder, png_filename)
+        # img.save(output_png_path, compress_level=6)
+        # png_save_duration = time.perf_counter() - png_save_start
+        # print(f"    ⏱️ PNG Speichern (compress_level=6): {png_save_duration:.4f}s")
 
         # 2. WebP Speichern (Lossless, method=4)
         webp_save_start = time.perf_counter()
