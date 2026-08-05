@@ -1,7 +1,5 @@
 requests
-eccodes
 numpy
-scipy
 Pillow
-xarray
-cfgrib
+omfiles
+scipy
