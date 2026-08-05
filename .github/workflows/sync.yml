@@ -1,4 +1,4 @@
-name: Run Pipeline
+name: Run DWD Pipeline
 
 on:
   workflow_dispatch:
