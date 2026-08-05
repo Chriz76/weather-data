@@ -39,8 +39,7 @@ class AromeWindProcessor:
         lon_source = grid_x
 
         # 3. Indizes für das AROME-Quellraster
-        # KORREKTUR: Zeile 0 entspricht lat_max (Norden), daher (lat_max - lat_source)
-        row_indices = (self.lat_max - lat_source) / (self.lat_max - self.lat_min) * (self.src_lat_shape - 1)
+        row_indices = (lat_source - self.lat_min) / (self.lat_max - self.lat_min) * (self.src_lat_shape - 1)
         col_indices = (lon_source - self.lon_min) / (self.lon_max - self.lon_min) * (self.src_lon_shape - 1)
 
         # Fertige Lookup-Matrix
