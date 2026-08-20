@@ -1,15 +1,12 @@
-import os
-import sys
-import requests
-import shutil
 import json
+import os
+import shutil
+import sys
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+import requests
 
-# Funktioniert im Notebook/Colab und als Skript
-script_dir = os.path.dirname(__file__) if "__file__" in globals() else os.getcwd()
-sys.path.append(script_dir)
-
+# Echten Processor aus der process.py Datei importieren
 from process import AromeWindProcessor
 
 # --- KONFIGURATION ---
@@ -17,16 +14,17 @@ OUTPUT_DIR = "./output"
 TEMP_OM_DIR = "./om_temp"
 API_VERSION = "1.1.0"
 
-# Open-Meteo Modellname aus S3
-MODEL_NAME = "meteofrance_arome_france0025_15min"
+# Open-Meteo Modellnamen aus S3
+MODEL_NAME_15MIN = "meteofrance_arome_france0025_15min"  # Wird stündlich berechnet (15-Min-Schritte)
+MODEL_NAME_3H = "meteofrance_arome_france0025"         # Wird 3-stündlich berechnet (1-Std.-Schritte)
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(TEMP_OM_DIR, exist_ok=True)
 
 
 def download_file(url, local_path):
-    """
-    Hilfsfunktion für Downloads.
+    """Hilfsfunktion für Downloads.
+
     Gibt bei HTTP 404 sofort False zurück (kein unnötiges Warten/Retry).
     """
     max_retries = 3
@@ -41,7 +39,9 @@ def download_file(url, local_path):
             elif response.status_code == 404:
                 return False
             else:
-                print(f"   ⚠️ Download-Versuch {attempt} fehlgeschlagen (Status: {response.status_code})")
+                print(
+                    f"   ⚠️ Download-Versuch {attempt} fehlgeschlagen (Status: {response.status_code})"
+                )
         except Exception as e:
             print(f"   ⚠️ Download-Fehler bei Versuch {attempt}: {e}")
 
@@ -53,93 +53,244 @@ def download_file(url, local_path):
     return False
 
 
-def run_arome_pipeline_15min():
-    arome_run_env = os.environ.get("TARGET_RUN")
-    
-    if not arome_run_env:
-        print("❌ FEHLER: Umgebungsvariable 'TARGET_RUN' fehlt!")
-        sys.exit(1)
-
-    # Erwartetes Format: "2026-07-27T17:00"
-    target_time = datetime.strptime(arome_run_env, "%Y-%m-%dT%H:%M").replace(tzinfo=timezone.utc)
-    
-    year = target_time.strftime("%Y")
-    month = target_time.strftime("%m")
-    day = target_time.strftime("%d")
-    run_hour_z = target_time.strftime("%H") + "00Z"  # z. B. "1700Z"
+def process_3hourly_arome_run(
+    base_target_time,
+    processor,
+    hours_to_check=12,
+    start_offset_hours=7,
+    download_hours=24,
+):
+    """Sucht ausgehend von base_target_time rückwärts nach dem neuesten verfügbaren
+    3-stündlichen Arome-Run auf S3.
+    Verarbeitet Stundenschritte und speichert sie im Format YYYYMMDD_HHZ.webp.
+    """
+    end_offset_hours = start_offset_hours + download_hours
 
     print(f"\n========================================================")
-    print(f"START PIPELINE (15-Minuten) - Run: {target_time.strftime('%Y-%m-%dT%H:%M')}Z")
+    print(
+        f"START 3-STÜNDLICHER CHECK & PROCESSOR (AB +{start_offset_hours}H BIS +{end_offset_hours}H)"
+    )
     print(f"========================================================")
 
-    # Processor initialisieren
-    processor = AromeWindProcessor(output_folder=OUTPUT_DIR, width=2000)
+    ref_hour = base_target_time.replace(minute=0, second=0, microsecond=0)
+    found_run_time = None
 
-    # Start-Fokus für die index.json (z. B. 20260727_1700)
-    detected_current_time_key = target_time.strftime('%Y%m%d_%H%M')
-    processed_timestamps = []
+    # 1. RÜCKWÄRTSSUCHE NACH DEM NEUESTEN 3H-RUN AUF S3
+    for i in range(hours_to_check):
+        check_time = ref_hour - timedelta(hours=i)
 
-    current_step_time = target_time
+        # Nur 3-stündliche Runs prüfen (00, 03, 06, 09, 12, 15, 18, 21 UTC)
+        if check_time.hour % 3 != 0:
+            continue
+
+        year = check_time.strftime("%Y")
+        month = check_time.strftime("%m")
+        day = check_time.strftime("%d")
+        run_hour_z = check_time.strftime("%H") + "00Z"
+
+        # Dynamic Check auf S3
+        check_step_time = check_time + timedelta(hours=end_offset_hours)
+        iso_file = f"{check_step_time.strftime('%Y-%m-%dT%H%M')}.om"
+        check_url = f"https://openmeteo.s3.amazonaws.com/data_spatial/{MODEL_NAME_3H}/{year}/{month}/{day}/{run_hour_z}/{iso_file}"
+
+        print(
+            f"   🔍 Prüfe S3 auf Vollständigkeit bis {check_step_time.strftime('%Y-%m-%dT%H:%M')}Z ({iso_file})..."
+        )
+
+        try:
+            resp = requests.head(check_url, timeout=10)
+            if resp.status_code == 200:
+                print(
+                    f"   🎯 Vollständigen 3h-Run auf S3 gefunden (Run: {check_time.strftime('%Y-%m-%dT%H:%M')}Z)"
+                )
+                found_run_time = check_time
+                break
+        except Exception as e:
+            print(f"   ⚠️ Fehler bei HEAD-Anfrage: {e}")
+
+    if not found_run_time:
+        print("   ❌ Kein vollständiger 3h-Run auf S3 gefunden.")
+        return []
+
+    # 2. BERECHNUNG START- UND END-ZEITPUNKT
+    start_time = base_target_time + timedelta(hours=start_offset_hours)
+    end_time = start_time + timedelta(hours=download_hours)
+
+    # Format für 3h-Run: Nur HH (ohne Minuten) -> YYYYMMDD_HH
+    end_time_key = end_time.strftime("%Y%m%d_%H")
+    end_webp_filename = f"{end_time_key}Z.webp"
+    end_file_path = os.path.join(OUTPUT_DIR, end_webp_filename)
+
+    timestamps_3h = []
+
+    # Prüfe, ob die End-Datei bereits existiert
+    if os.path.exists(end_file_path):
+        print(
+            f"   ℹ️ End-Datei {end_webp_filename} existiert bereits im Output-Ordner."
+        )
+        print(
+            f"   -> Run wurde bereits verarbeitet. Rekonsolidiere Timestamps (+{start_offset_hours}h bis +{end_offset_hours}h)..."
+        )
+
+        curr = start_time
+        while curr <= end_time:
+            tk = curr.strftime("%Y%m%d_%H")
+            if os.path.exists(os.path.join(OUTPUT_DIR, f"{tk}Z.webp")):
+                timestamps_3h.append(tk)
+            curr += timedelta(hours=1)
+
+        return timestamps_3h
+
+    # 3. DOWNLOAD & VERARBEITUNG
+    print(
+        f"   🚀 Starte Download für 3h-Run ab {start_time.strftime('%Y-%m-%dT%H:%M')}Z bis {end_time.strftime('%Y-%m-%dT%H:%M')}Z..."
+    )
+
+    year = found_run_time.strftime("%Y")
+    month = found_run_time.strftime("%m")
+    day = found_run_time.strftime("%d")
+    run_hour_z = found_run_time.strftime("%H") + "00Z"
+
+    current_step_time = start_time
     consecutive_missing = 0
 
-    # Solange 15-Minuten-Schritte herunterladen, bis Dateien auf S3 aufhören (404)
-    while consecutive_missing < 2:
-        # Format für Frontend-Grafiken: YYYYMMDD_HHMMZ.webp (z.B. 20260727_1715Z.webp)
-        time_key = current_step_time.strftime('%Y%m%d_%H%M')
+    # Iteration in 1-Stunden-Schritten
+    while current_step_time <= end_time and consecutive_missing < 2:
+        time_key = current_step_time.strftime("%Y%m%d_%H")  # HH-Format
         webp_filename = f"{time_key}Z.webp"
-
-        # Dateiname im S3-Bucket (z. B. 2026-07-27T1715.om)
         iso_file_name = f"{current_step_time.strftime('%Y-%m-%dT%H%M')}.om"
-        
-        url_om = f"https://openmeteo.s3.amazonaws.com/data_spatial/{MODEL_NAME}/{year}/{month}/{day}/{run_hour_z}/{iso_file_name}"
+
+        url_om = f"https://openmeteo.s3.amazonaws.com/data_spatial/{MODEL_NAME_3H}/{year}/{month}/{day}/{run_hour_z}/{iso_file_name}"
         om_path = os.path.join(TEMP_OM_DIR, iso_file_name)
 
-        print(f"   -> Downloade 15m-Schritt: {iso_file_name}...")
-        
+        print(f"   -> Downloade 3h-Schritt (1h Auflösung): {iso_file_name}...")
+
         if download_file(url_om, om_path):
             consecutive_missing = 0
-            success = processor.process_om_file(om_path, output_filename=webp_filename)
+            success = processor.process_om_file(
+                om_path, output_filename=webp_filename
+            )
 
             if os.path.exists(om_path):
                 os.remove(om_path)
 
             if success:
-                processed_timestamps.append(time_key)
+                timestamps_3h.append(time_key)
                 print(f"      ✅ Erfolgreich prozessiert -> {webp_filename}")
         else:
             consecutive_missing += 1
-            print(f"   ℹ️ Datei {iso_file_name} im Run {run_hour_z} nicht mehr vorhanden.")
+            print(
+                f"   ℹ️ Datei {iso_file_name} im 3h-Run nicht vorhanden (404)."
+            )
 
-        # Nächster 15-Minuten-Schritt
+        current_step_time += timedelta(hours=1)
+
+    return timestamps_3h
+
+
+def run_arome_pipeline_15min():
+    arome_run_env = os.environ.get("TARGET_RUN")
+
+    if not arome_run_env:
+        # Fallback: Falls keine Umgebungsvariable gesetzt ist, nutzen wir vorangehende UTC-Stunde
+        fallback_time = datetime.now(timezone.utc) - timedelta(hours=2)
+        arome_run_env = fallback_time.strftime("%Y-%m-%dT%H:00")
+        print(f"ℹ️ Keine 'TARGET_RUN' Variable gesetzt. Verwende automatischen Fallback-Run: {arome_run_env}")
+
+    target_time = datetime.strptime(
+        arome_run_env, "%Y-%m-%dT%H:%M"
+    ).replace(tzinfo=timezone.utc)
+
+    year = target_time.strftime("%Y")
+    month = target_time.strftime("%m")
+    day = target_time.strftime("%d")
+    run_hour_z = target_time.strftime("%H") + "00Z"
+
+    print(f"\n========================================================")
+    print(
+        f"START PIPELINE (15-Minuten) - Run: {target_time.strftime('%Y-%m-%dT%H:%M')}Z"
+    )
+    print(f"========================================================")
+
+    # Initialisiere den echten AromeWindProcessor
+    processor = AromeWindProcessor(output_folder=OUTPUT_DIR, width=2000)
+
+    # Key im HHMM-Format für den 15m Run
+    detected_current_time_key = target_time.strftime("%Y%m%d_%H%M")
+    processed_timestamps_15m = []
+
+    current_step_time = target_time
+    consecutive_missing = 0
+
+    # 1. 15-MINUTEN RUN VERARBEITEN
+    while consecutive_missing < 2:
+        time_key = current_step_time.strftime("%Y%m%d_%H%M")  # HHMM-Format
+        webp_filename = f"{time_key}Z.webp"
+        iso_file_name = f"{current_step_time.strftime('%Y-%m-%dT%H%M')}.om"
+
+        url_om = f"https://openmeteo.s3.amazonaws.com/data_spatial/{MODEL_NAME_15MIN}/{year}/{month}/{day}/{run_hour_z}/{iso_file_name}"
+        om_path = os.path.join(TEMP_OM_DIR, iso_file_name)
+
+        print(f"   -> Downloade 15m-Schritt: {iso_file_name}...")
+
+        if download_file(url_om, om_path):
+            consecutive_missing = 0
+            success = processor.process_om_file(
+                om_path, output_filename=webp_filename
+            )
+
+            if os.path.exists(om_path):
+                os.remove(om_path)
+
+            if success:
+                processed_timestamps_15m.append(time_key)
+                print(f"      ✅ Erfolgreich prozessiert -> {webp_filename}")
+        else:
+            consecutive_missing += 1
+            print(
+                f"   ℹ️ Datei {iso_file_name} im Run {run_hour_z} nicht mehr vorhanden."
+            )
+
         current_step_time += timedelta(minutes=15)
 
-    # =========================================================================
-    # GENERIERUNG DER INDEX.JSON FÜR DAS FRONTEND
-    # =========================================================================
-    if processed_timestamps:
-        index_path = os.path.join(OUTPUT_DIR, "index.json")
-        sorted_timestamps = sorted(processed_timestamps)
+    # 2. 3-STÜNDLICHEN RUN VERARBEITEN
+    timestamps_3h = process_3hourly_arome_run(
+        base_target_time=target_time, processor=processor
+    )
 
-        if detected_current_time_key in sorted_timestamps:
-            current_hour = detected_current_time_key
-        else:
-            current_hour = sorted_timestamps[0]
+    # 3. BEIDE TIMESTAMPS VERBINDEN & INDEX.JSON EINMALIG GENERIEREN
+    all_timestamps = sorted(
+        list(set(processed_timestamps_15m + timestamps_3h))
+    )
+
+    if all_timestamps:
+        index_path = os.path.join(OUTPUT_DIR, "index.json")
+
+        current_hour = (
+            detected_current_time_key
+            if detected_current_time_key in all_timestamps
+            else all_timestamps[0]
+        )
 
         index_data = {
-            "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "available_timestamps": sorted_timestamps,
+            "generated_at": datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "available_timestamps": all_timestamps,
             "current_hour": current_hour,
             "step_type": "15min",
-            "api_version": API_VERSION
+            "api_version": API_VERSION,
         }
 
         print(f"\n📝 Generiere {index_path}...")
-        print(f"   -> Insgesamt generierte 15-Minuten-Schritte: {len(sorted_timestamps)}")
+        print(f"   -> 15-Min-Schritte (HHMM): {len(processed_timestamps_15m)}")
+        print(f"   -> 3h-Schritte (HH):       {len(timestamps_3h)}")
+        print(f"   -> Gesamt kombiniert:      {len(all_timestamps)}")
         print(f"   -> Standard-Fokus (current_hour): {current_hour}")
 
         with open(index_path, "w") as f:
             json.dump(index_data, f, indent=2)
-        print("✅ index.json erfolgreich aktualisiert!")
+        print("✅ index.json erfolgreich erstellt!")
     else:
         print("⚠️ Warnung: Keine Daten-Timestamps erzeugt.")
 
@@ -148,11 +299,8 @@ def run_arome_pipeline_15min():
         shutil.rmtree(TEMP_OM_DIR)
         print("🧹 Temporärer Ordner bereinigt!")
 
-    print("\n🎉 15-MINUTEN PIPELINE SAUBER BEENDET!")
+    print("\n🎉 PIPELINE SAUBER BEENDET!")
 
 
 if __name__ == "__main__":
-    if "TARGET_RUN" not in os.environ:
-        os.environ["TARGET_RUN"] = "2026-07-27T17:00"
-
     run_arome_pipeline_15min()
