@@ -53,7 +53,6 @@ def download_file(url, local_path):
 
     return False
 
-
 def process_3hourly_arome_run(
     base_target_time,
     processor,
@@ -62,8 +61,7 @@ def process_3hourly_arome_run(
     download_hours=24,
 ):
     """Sucht ausgehend von base_target_time rückwärts nach dem neuesten verfügbaren
-    3-stündlichen Arome-Run auf S3.
-    Verarbeitet Stundenschritte und speichert sie im Format YYYYMMDD_HHZ.webp.
+    3-stündlichen Arome-Run auf S3 und verarbeitet ihn.
     """
     end_offset_hours = start_offset_hours + download_hours
 
@@ -80,7 +78,6 @@ def process_3hourly_arome_run(
     for i in range(hours_to_check):
         check_time = ref_hour - timedelta(hours=i)
 
-        # Nur 3-stündliche Runs prüfen (00, 03, 06, 09, 12, 15, 18, 21 UTC)
         if check_time.hour % 3 != 0:
             continue
 
@@ -89,7 +86,7 @@ def process_3hourly_arome_run(
         day = check_time.strftime("%d")
         run_hour_z = check_time.strftime("%H") + "00Z"
 
-        # Dynamic Check auf S3
+        # Check auf das tatsächliche Ende dieses konkreten S3-Runs
         check_step_time = check_time + timedelta(hours=end_offset_hours)
         iso_file = f"{check_step_time.strftime('%Y-%m-%dT%H%M')}.om"
         check_url = f"https://openmeteo.s3.amazonaws.com/data_spatial/{MODEL_NAME_3H}/{year}/{month}/{day}/{run_hour_z}/{iso_file}"
@@ -113,24 +110,25 @@ def process_3hourly_arome_run(
         print("   ❌ Kein vollständiger 3h-Run auf S3 gefunden.")
         return []
 
-    # 2. BERECHNUNG START- UND END-ZEITPUNKT
+    # 2. DEFINITION DES HERUNTERZULADENDEN BEREICHS
+    # Start: Relativ zur aktuellen Ausführungszeit (+7h)
     start_time = base_target_time + timedelta(hours=start_offset_hours)
-    end_time = start_time + timedelta(hours=download_hours)
+    # Ende: Das tatsächliche Ende des S3-Runs (Run + 31h)
+    end_time = found_run_time + timedelta(hours=end_offset_hours)
 
-    # Format für 3h-Run: Nur HH (ohne Minuten) -> YYYYMMDD_HH
     end_time_key = end_time.strftime("%Y%m%d_%H")
     end_webp_filename = f"{end_time_key}Z.webp"
     end_file_path = os.path.join(OUTPUT_DIR, end_webp_filename)
 
     timestamps_3h = []
 
-    # Prüfe, ob die End-Datei bereits existiert
+    # 3. LOKALE PRÜFUNG: WURDE DIESER RUN BEREITS BIS ZUM ENDE VERARBEITET?
     if os.path.exists(end_file_path):
         print(
-            f"   ℹ️ End-Datei {end_webp_filename} existiert bereits im Output-Ordner."
+            f"   ℹ️ Run {found_run_time.strftime('%Y-%m-%dT%H:%M')}Z wurde bereits vollständig verarbeitet."
         )
         print(
-            f"   -> Run wurde bereits verarbeitet. Rekonsolidiere Timestamps (+{start_offset_hours}h bis +{end_offset_hours}h)..."
+            f"   -> Rekonsolidiere lokale WebPs ({start_time.strftime('%Y-%m-%d %H:00')} bis {end_time.strftime('%Y-%m-%d %H:00')})..."
         )
 
         curr = start_time
@@ -142,9 +140,9 @@ def process_3hourly_arome_run(
 
         return timestamps_3h
 
-    # 3. DOWNLOAD & VERARBEITUNG
+    # 4. DOWNLOAD & VERARBEITUNG (falls neu)
     print(
-        f"   🚀 Starte Download für 3h-Run ab {start_time.strftime('%Y-%m-%dT%H:%M')}Z bis {end_time.strftime('%Y-%m-%dT%H:%M')}Z..."
+        f"   🚀 Neuer Run! Starte Download ab {start_time.strftime('%Y-%m-%dT%H:%M')}Z bis {end_time.strftime('%Y-%m-%dT%H:%M')}Z..."
     )
 
     year = found_run_time.strftime("%Y")
@@ -155,9 +153,8 @@ def process_3hourly_arome_run(
     current_step_time = start_time
     consecutive_missing = 0
 
-    # Iteration in 1-Stunden-Schritten
     while current_step_time <= end_time and consecutive_missing < 2:
-        time_key = current_step_time.strftime("%Y%m%d_%H")  # HH-Format
+        time_key = current_step_time.strftime("%Y%m%d_%H")
         webp_filename = f"{time_key}Z.webp"
         iso_file_name = f"{current_step_time.strftime('%Y-%m-%dT%H%M')}.om"
 
