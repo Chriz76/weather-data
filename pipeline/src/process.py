@@ -57,8 +57,12 @@ class WindProcessor:
         self.width = 2000
         self.height = int(self.width * (y_max_merc - y_min_merc) / (lon_max - lon_min))
 
-        grid_x_linear = np.linspace(lon_min, lon_max, self.width)
-        grid_y_merc = np.linspace(y_max_merc, y_min_merc, self.height)
+        dx_pixel = (lon_max - lon_min) / self.width
+        dy_pixel = (y_max_merc - y_min_merc) / self.height
+
+        grid_x_linear = np.linspace(lon_min + 0.5 * dx_pixel, lon_max - 0.5 * dx_pixel, self.width)
+        grid_y_merc = np.linspace(y_max_merc - 0.5 * dy_pixel, y_min_merc + 0.5 * dy_pixel, self.height)
+        
         self.grid_x, self.grid_y = np.meshgrid(grid_x_linear, grid_y_merc)
 
         points_merc = np.vstack((x_pts_merc, y_pts_merc)).T.astype(np.float64)
