@@ -33,8 +33,10 @@ class AromeWindProcessor:
         dx_pixel = (self.lon_max - self.lon_min) / self.width
         dy_pixel = (y_max_merc - y_min_merc) / self.height
 
-        grid_x_linear = np.linspace(self.lon_min + 0.5 * dx_pixel, self.lon_max - 0.5 * dx_pixel, self.width)
-        grid_y_merc = np.linspace(y_max_merc - 0.5 * dy_pixel, y_min_merc + 0.5 * dy_pixel, self.height)        
+        # KORREKTUR: Abfragepunkte nach Nord-Westen verschieben, um den Süd-Ost-Drift auszugleichen
+        grid_x_linear = np.linspace(self.lon_min - 0.5 * dx_pixel, self.lon_max - 0.5 * dx_pixel, self.width)
+        grid_y_merc = np.linspace(y_max_merc + 0.5 * dy_pixel, y_min_merc + 0.5 * dy_pixel, self.height)
+
         grid_x, grid_y = np.meshgrid(grid_x_linear, grid_y_merc)
 
         # 2. Rücktransformation der Mercator-Y-Pixel in echte WGS84-Latitudes
