@@ -28,10 +28,10 @@ class AromeWindProcessor:
 
         # Höhe proportional zur Mercator-Verzerrung
         self.height = int(self.width * (y_max_merc - y_min_merc) / (self.lon_max - self.lon_min))
-        
-        # Pixel-Schrittweiten im Zielbild
+
+        # 1. Ziel-Grid in Web-Mercator definieren (Pixel 0 oben = Nord = y_max_merc)
         grid_x_linear = np.linspace(self.lon_min, self.lon_max, self.width)
-        grid_y_merc = np.linspace(y_min_merc, y_max_merc, self.height)        
+        grid_y_merc = np.linspace(y_max_merc, y_min_merc, self.height)
         grid_x, grid_y = np.meshgrid(grid_x_linear, grid_y_merc)
 
         # 2. Rücktransformation der Mercator-Y-Pixel in echte WGS84-Latitudes
@@ -39,7 +39,7 @@ class AromeWindProcessor:
         lon_source = grid_x
 
         # 3. Indizes für das AROME-Quellraster
-        row_indices = (self.lat_max - lat_source) / (self.lat_max - self.lat_min) * (self.src_lat_shape - 1)
+        row_indices = (lat_source - self.lat_min) / (self.lat_max - self.lat_min) * (self.src_lat_shape - 1)
         col_indices = (lon_source - self.lon_min) / (self.lon_max - self.lon_min) * (self.src_lon_shape - 1)
 
         # Fertige Lookup-Matrix
