@@ -28,10 +28,15 @@ class AromeWindProcessor:
 
         # Höhe proportional zur Mercator-Verzerrung
         self.height = int(self.width * (y_max_merc - y_min_merc) / (self.lon_max - self.lon_min))
+        
+        # Pixel-Schrittweiten im Zielbild
+        dx_pixel = (self.lon_max - self.lon_min) / self.width
+        dy_pixel = (y_max_merc - y_min_merc) / self.height
 
-        grid_x_linear = np.linspace(self.lon_min, self.lon_max, self.width)
-        grid_y_merc = np.linspace(y_min_merc, y_max_merc, self.height)
-
+        # Target-Grid auf Pixel-ZENTREN ausrichten (+0.5 Pixel innen)
+        grid_x_linear = np.linspace(self.lon_min + 0.5 * dx_pixel, self.lon_max - 0.5 * dx_pixel, self.width)
+        grid_y_merc = np.linspace(y_min_merc + 0.5 * dy_pixel, y_max_merc - 0.5 * dy_pixel, self.height)
+        
         grid_x, grid_y = np.meshgrid(grid_x_linear, grid_y_merc)
 
         # 2. Rücktransformation der Mercator-Y-Pixel in echte WGS84-Latitudes
