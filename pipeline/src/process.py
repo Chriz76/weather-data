@@ -30,22 +30,8 @@ class AromeWindProcessor:
         self.height = int(self.width * (y_max_merc - y_min_merc) / (self.lon_max - self.lon_min))
 
         # 1. Ziel-Grid in Web-Mercator definieren (Pixel 0 oben = Nord = y_max_merc)
-        # Schrittweiten im Zielgitter berechnen
-        dx_merc = (self.lon_max - self.lon_min) / self.width
-        dy_merc = (y_max_merc - y_min_merc) / self.height
-
-        # Start bei Kante + 0.5 * Schrittweite
-        grid_x_linear = np.linspace(
-            self.lon_min + dx_merc / 2.0, 
-            self.lon_max - dx_merc / 2.0, 
-            self.width
-        )
-
-        grid_y_merc = np.linspace(
-            y_max_merc - dy_merc / 2.0, 
-            y_min_merc + dy_merc / 2.0, 
-            self.height
-        )
+        grid_x_linear = np.linspace(self.lon_min, self.lon_max, self.width)
+        grid_y_merc = np.linspace(y_max_merc, y_min_merc, self.height)
 
         grid_x, grid_y = np.meshgrid(grid_x_linear, grid_y_merc)
 
