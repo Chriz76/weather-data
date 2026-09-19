@@ -51,17 +51,22 @@ jobs:
           DWD_TARGET_RUN: ${{ github.event.inputs.dwd_run }}
         run: python pipeline/src/dwd_pipeline.py
 
+      - name: Create _headers file for CORS
+        run: |
+          cat <<EOF > output/_headers
+          /*
+            Access-Control-Allow-Origin: *
+            Access-Control-Allow-Headers: Content-Type, Authorization
+          EOF
       # ==========================================
       # NEU: Upload des 'output' Ordners zu Cloudflare Pages
       # ==========================================
       - name: Deploy Data to Cloudflare Pages
-        uses: cloudflare/pages-action@v1
+        uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           accountId: c728452fcd5090f3d7f2bacc5e75fcd2
-          projectName: 'winddata'      # Nutze hier den Namen deines Cloudflare-Projekts
-          directory: './output'        # Lädt exakt den generierten Datenordner hoch
-          branch: 'main'               # Zwingt Cloudflare dazu, dies als Production-Build zu behandeln
+          command: pages deploy output --project-name=winddata --branch=main
           # Cloudflare erlaubt es, CORS-Header direkt hier zu definieren:
           headers: |
             /*
