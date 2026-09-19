@@ -1,4 +1,5 @@
 import os
+import math
 import time
 import numpy as np
 from PIL import Image
@@ -7,6 +8,10 @@ from scipy.ndimage import map_coordinates
 import io
 from pmtiles.writer import Writer
 from pmtiles.tile import TileType, Compression, zxy_to_tileid
+import requests
+import gzip
+from pmtiles.tile import TileType, Compression, zxy_to_tileid
+
 
 # --- 1. GEO-HILFSFUNKTIONEN ---
 
