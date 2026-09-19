@@ -1,9 +1,14 @@
+%%writefile process.py
+
 import os
 import time
 import numpy as np
 from PIL import Image
 from omfiles import OmFileReader
 from scipy.ndimage import map_coordinates
+import io
+from pmtiles.writer import Writer
+from pmtiles.tile import TileType, Compression, zxy_to_tileid
 
 
 class AromeWindProcessor:
@@ -66,6 +71,128 @@ class AromeWindProcessor:
         init_duration = time.perf_counter() - init_start_time
         print(f"✅ [AromeProcessor] Ziel-Gitter initialisiert: {self.width}x{self.height} Pixel (Init: {init_duration:.4f}s)")
 
+    def _create_wind_direction_pmtiles(self, u_raw, v_raw, output_pmtiles_path, min_zoom=0, max_zoom=8):
+        """Erzeugt binäre Float32 PMTiles mit Gzip-Komprimierung und 24-Byte Header."""
+
+        # 1D Koordinatenvektoren (North-Up im Ursprungskontext)
+        lats = np.linspace(self.lat_min, self.lat_max, self.src_lat_shape)
+        lons = np.linspace(self.lon_min, self.lon_max, self.src_lon_shape)
+
+        tiles_dict = {}
+
+        # Schleife über Web-Mercator Kacheln je Zoomstufe
+        for z in range(min_zoom, max_zoom + 1):
+            stride = 2 ** (max_zoom - z)
+
+            # Subsampling je nach Zoom-Level
+            u_lod = u_raw[::stride, ::stride]
+            v_lod = v_raw[::stride, ::stride]
+            lats_lod = lats[::stride]
+            lons_lod = lons[::stride]
+
+            n = 2 ** z
+            for x in range(n):
+                for y in range(n):
+                    t_lon_min, t_lat_min, t_lon_max, t_lat_max = tile_bounds_wgs84(z, x, y)
+
+                    if (t_lon_max < self.lon_min or t_lon_min > self.lon_max or
+                        t_lat_max < self.lat_min or t_lat_min > self.lat_max):
+                        continue
+
+                    col_indices = np.where((lons_lod >= t_lon_min) & (lons_lod <= t_lon_max))[0]
+                    row_indices = np.where((lats_lod >= t_lat_min) & (lats_lod <= t_lat_max))[0]
+
+                    if len(col_indices) == 0 or len(row_indices) == 0:
+                        continue
+
+                    c_start = col_indices[0]
+                    c_end = col_indices[-1] + 1
+
+                    # Lat-Indizes für North-Up Ausrichtung
+                    r_start_idx = row_indices[-1]
+                    r_end_idx = row_indices[0]
+
+                    # Teilbereich ausschneiden
+                    sub_u = u_lod[r_end_idx:r_start_idx + 1, c_start:c_end]
+                    sub_v = v_lod[r_end_idx:r_start_idx + 1, c_start:c_end]
+
+                    # Zeilen umkehren für North-Up (nördlichste Breite = Zeile 0)
+                    sub_u = np.flipud(sub_u)
+                    sub_v = np.flipud(sub_v)
+
+                    rows, cols = sub_u.shape
+
+                    if rows == 0 or cols == 0:
+                        continue
+
+                    # Bounding-Check auf valide Vektoren
+                    valid_mask = ~np.isnan(sub_u) & ~np.isnan(sub_v)
+                    if not np.any(valid_mask):
+                        continue
+
+                    # 1. HEADER (6x Float32 = 24 Bytes)
+                    origin_lng = float(lons_lod[c_start])
+                    origin_lat = float(lats_lod[r_start_idx]) # Nördlichste Breite
+
+                    delta_lng = float(lons_lod[1] - lons_lod[0]) if len(lons_lod) > 1 else 0.025 * stride
+                    delta_lat = float(lats_lod[1] - lats_lod[0]) if len(lats_lod) > 1 else 0.025 * stride
+
+                    header_meta = np.array([
+                        origin_lng,
+                        origin_lat,
+                        delta_lng,
+                        delta_lat,
+                        float(rows),
+                        float(cols)
+                    ], dtype=np.float32)
+
+                    # 2. PAYLOAD (u, v verschachtelt als Float32 Array)
+                    # Form: [u0, v0, u1, v1, u2, v2, ...]
+                    uv_interleaved = np.empty((rows, cols, 2), dtype=np.float32)
+                    uv_interleaved[:, :, 0] = sub_u
+                    uv_interleaved[:, :, 1] = sub_v
+
+                    raw_tile_bytes = header_meta.tobytes() + uv_interleaved.tobytes()
+
+                    # 3. GZIP KOMPRESSION ANWENDEN
+                    compressed_tile_bytes = gzip.compress(raw_tile_bytes)
+
+                    tiles_dict[zxy_to_tileid(z, x, y)] = compressed_tile_bytes
+
+        # PMTiles schreiben
+        with open(output_pmtiles_path, "wb") as f:
+            writer = Writer(f)
+
+            for tile_id in sorted(tiles_dict.keys()):
+                writer.write_tile(tile_id, tiles_dict[tile_id])
+
+            header = {
+                "tile_type": TileType.UNKNOWN,
+                "tile_compression": Compression.GZIP,
+                "min_zoom": min_zoom,
+                "max_zoom": max_zoom,
+                "min_lon": self.lon_min,
+                "min_lat": self.lat_min,
+                "max_lon": self.lon_max,
+                "max_lat": self.lat_max,
+                "center_zoom": 5,
+                "center_lon": (self.lon_min + self.lon_max) / 2.0,
+                "center_lat": (self.lat_min + self.lat_max) / 2.0
+            }
+
+            metadata = {
+                "name": "AROME Wind Vector Binary PMTiles (Gzip)",
+                "format": "binary",
+                "description": "24 Byte Float32 Header + Interleaved Float32 (U, V) Payload mit Gzip-Kompression."
+            }
+
+            writer.finalize(header, metadata)
+
+        file_size_kb = os.path.getsize(output_pmtiles_path) / 1024.0
+        print(f"✅ PMTiles Container erfolgreich erstellt: {output_pmtiles_path}")
+        print(f"💾 Gesamtgröße: {file_size_kb:.2f} KB")
+        return True
+
     def process_om_file(self, om_path, output_filename=None):
         step_start_time = time.perf_counter()
 
@@ -86,6 +213,7 @@ class AromeWindProcessor:
             u_raw = u_node.read_array(...)
             v_raw = v_node.read_array(...)
 
+        # Process for WEBP (existing logic)
         u_clean = np.nan_to_num(u_raw, nan=0.0)
         v_clean = np.nan_to_num(v_raw, nan=0.0)
 
@@ -118,6 +246,16 @@ class AromeWindProcessor:
         output_webp_path = os.path.join(self.output_folder, output_filename)
         img.save(output_webp_path, format="WEBP", lossless=True, method=4)
 
+        success_webp = True # Assuming webp processing is always successful for now
+
+        # Process for PMTiles (new logic)
+        pmtiles_filename = output_filename.replace('.webp', '_dir.pmtiles')
+        output_pmtiles_path = os.path.join(self.output_folder, pmtiles_filename)
+        success_pmtiles = self._create_wind_direction_pmtiles(u_raw, v_raw, output_pmtiles_path)
+
+        if os.path.exists(om_path):
+            os.remove(om_path)
+
         step_duration = time.perf_counter() - step_start_time
         print(f"    ⏱️ Dauer: {step_duration:.3f}s")
-        return True
+        return success_webp and success_pmtiles
