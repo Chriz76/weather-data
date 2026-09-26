@@ -31,6 +31,7 @@ jobs:
         with:
           ref: gh-pages
           path: output
+          fetch-depth: 1
         continue-on-error: true
         # Fetch the current state of data assets into the './output' directory.
         # 'continue-on-error' ensures the workflow proceeds if the 'gh-pages' branch does not exist yet.
