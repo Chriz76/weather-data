@@ -28,6 +28,7 @@ jobs:
         with:
           ref: gh-pages-dev
           path: output
+          fetch-depth: 1
         continue-on-error: true
 
       - name: Set up Python
