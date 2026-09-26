@@ -54,24 +54,18 @@ jobs:
         # The script evaluates existing data in './output' to perform gap-detection
         # and incrementally updates the dataset along with index.json.
 
-      - name: Clean and Force-Push Data Branch (gh-pages)
+      - name: Force-Push Data Branch (gh-pages)
         run: |
-          # Navigate into the processed output directory
           cd output
-          
-          # Remove the existing git metadata fetched during the checkout step
-          rm -rf .git
-          
-          # Initialize a clean, isolated git repository for data deployment
-          git init -b gh-pages
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           
-          # Stage and commit all existing and newly generated data assets
+          # Erstellt einen frischen Branch ohne History (falls er neu ist) 
+          # oder hält die Datei-Nachverfolgung sauber aufrecht
+          git checkout --orphan temp-branch || true
+          
           git add -A
           git commit -m "DWD Weather Pipeline - Live State [skip ci]"
           
-          # Force-push to overwrite the 'gh-pages' branch, keeping the commit history flat 
-          # and serving the assets directly from the repository root for GitHub Pages.
-          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
-          git push --force origin gh-pages
+          # Drückt den Commit als einzigen Commit auf gh-pages
+          git push --force origin HEAD:gh-pages
