@@ -75,14 +75,21 @@ jobs:
               Access-Control-Allow-Headers: Content-Type, Authorization
       # ==========================================
 
-      - name: Clean and Force-Push Data Branch (gh-pages-dev)
+      - name: Force-Push Data Branch (gh-pages-dev)
         run: |
           cd output
-          rm -rf .git
-          git init -b gh-pages-dev
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
+          
+          # Erstellt einen frischen, isolierten Branch ohne Historie
+          git checkout --orphan temp-data-branch
+          
           git add -A
           git commit -m "DWD Weather Pipeline - Live State [skip ci]"
+          
+          # Remote URL anpassen
+          git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" || \
           git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
-          git push --force origin gh-pages-dev
+          
+          # Pusht den Inhalt von 'temp-data-branch' direkt in den Remote-Branch 'gh-pages-dev'
+          git push --force origin temp-data-branch:gh-pages-dev
