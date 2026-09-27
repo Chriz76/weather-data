@@ -56,8 +56,13 @@ jobs:
         run: |
           cat <<EOF > output/_headers
           /*
+            Cache-Control: no-cache
             Access-Control-Allow-Origin: *
-            Access-Control-Allow-Headers: Content-Type, Authorization
+            Access-Control-Allow-Headers: Range, Content-Type, Authorization
+            Access-Control-Expose-Headers: Content-Range, Content-Length, Accept-Ranges
+
+          /*.pmtiles
+            Cache-Control: no-cache, no-transform
           EOF
       # ==========================================
       # NEU: Upload des 'output' Ordners zu Cloudflare Pages
@@ -68,11 +73,6 @@ jobs:
           apiToken: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           accountId: c728452fcd5090f3d7f2bacc5e75fcd2
           command: pages deploy output --project-name=winddata --branch=main
-          # Cloudflare erlaubt es, CORS-Header direkt hier zu definieren:
-          headers: |
-            /*
-              Access-Control-Allow-Origin: *
-              Access-Control-Allow-Headers: Content-Type, Authorization
       # ==========================================
 
       - name: Force-Push Data Branch (gh-pages-dev)
