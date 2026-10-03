@@ -19,6 +19,7 @@ API_VERSION = "1.1.0"
 MODEL_NAME_15MIN = "meteofrance_arome_france0025_15min"  # Wird stündlich berechnet (15-Min-Schritte)
 MODEL_NAME_3H = "meteofrance_arome_france0025"         # Wird 3-stündlich berechnet (1-Std.-Schritte)
 MAX_WEBP_COUNT = 200  # Maximal zu behaltende WebP-Dateien
+MAX_PMTILES_COUNT = 200  # Maximal zu behaltende PMTiles-Dateien
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(TEMP_OM_DIR, exist_ok=True)
@@ -186,24 +187,34 @@ def process_3hourly_arome_run(
 
     return timestamps_3h
 
-def cleanup_old_webps(output_dir, max_keep=200):
-    """Löscht ältere WebP-Dateien im Ausgabeordner basierend auf dem Dateinamen."""
-    webp_files = glob.glob(os.path.join(output_dir, "*.webp"))
-    
-    if len(webp_files) > max_keep:
-        print(f"\n🧹 Bereinige alte WebPs ({len(webp_files)} vorhanden, maximal {max_keep} erlaubt)...")
+def cleanup_old_files(output_dir, pattern, max_keep, label):
+    """Löscht ältere Dateien im Ausgabeordner basierend auf dem Dateinamen."""
+    files = glob.glob(os.path.join(output_dir, pattern))
+
+    if len(files) > max_keep:
+        print(f"\n🧹 Bereinige alte {label} ({len(files)} vorhanden, maximal {max_keep} erlaubt)...")
         # Alphabethische Sortierung nach Dateinamen (älteste Timestamps stehen vorne)
-        webp_files.sort()
-        
+        files.sort()
+
         # Alle Dateien bis auf die letzten max_keep (die neuesten) löschen
-        files_to_delete = webp_files[:-max_keep]
+        files_to_delete = files[:-max_keep]
         for file_path in files_to_delete:
             try:
                 os.remove(file_path)
                 print(f"   🗑️ Gelöscht: {os.path.basename(file_path)}")
             except Exception as e:
                 print(f"   ⚠️ Fehler beim Löschen von {file_path}: {e}")
-        print(f"✅ Bereinigung abgeschlossen. Es verbleiben {max_keep} WebP-Dateien.")
+        print(f"✅ Bereinigung abgeschlossen. Es verbleiben {max_keep} {label}.")
+
+
+def cleanup_old_webps(output_dir, max_keep=200):
+    """Löscht ältere WebP-Dateien im Ausgabeordner basierend auf dem Dateinamen."""
+    cleanup_old_files(output_dir, "*.webp", max_keep, "WebP-Dateien")
+
+
+def cleanup_old_pmtiles(output_dir, max_keep=200):
+    """Löscht ältere PMTiles-Dateien im Ausgabeordner basierend auf dem Dateinamen."""
+    cleanup_old_files(output_dir, "*_dir.pmtiles", max_keep, "PMTiles-Dateien")
         
 
 def run_arome_pipeline_15min():
@@ -314,6 +325,9 @@ def run_arome_pipeline_15min():
 
     # Alte WebP-Dateien nach Dateinamen-Sortierung bereinigen
     cleanup_old_webps(OUTPUT_DIR, max_keep=MAX_WEBP_COUNT)
+
+    # Alte PMTiles-Dateien nach Dateinamen-Sortierung bereinigen
+    cleanup_old_pmtiles(OUTPUT_DIR, max_keep=MAX_PMTILES_COUNT)
     
     # Aufräumen
     if os.path.exists(TEMP_OM_DIR):
