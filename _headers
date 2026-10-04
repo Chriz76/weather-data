@@ -1,0 +1,8 @@
+/*
+  Cache-Control: no-cache
+  Access-Control-Allow-Origin: *
+  Access-Control-Allow-Headers: Range, Content-Type, Authorization
+  Access-Control-Expose-Headers: Content-Range, Content-Length, Accept-Ranges
+
+/*.pmtiles
+  Cache-Control: no-cache, no-transform
