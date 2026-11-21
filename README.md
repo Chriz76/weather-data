@@ -1,1 +1,1 @@
-# Arome weather-data
+# Arome PI weather-data using Open Meteo
